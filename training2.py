@@ -1,18 +1,20 @@
+from training_utils import bootstrap, periodic_box_mask
+from losses import VarianceLoss
+from networks import UNet
+from deformations import HomogenousDeformations
+from argparsing import parseargs
+import observables
+import actions
+import pdb
+from tqdm import tqdm
+import torch.optim as optim
+import torch.nn as nn
+import torch
 import h5py
 import matplotlib.pyplot as plt
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from tqdm import tqdm
-import pdb
+import matplotlib
+matplotlib.use("QtAgg")
 
-import actions
-import observables
-from argparsing import parseargs
-from deformations import HomogenousDeformations
-from networks import UNet
-from losses import VarianceLoss
-from training_utils import bootstrap
 
 WARMUP_EPOCHS = 50
 BEST_WINDOW = 20
@@ -29,7 +31,8 @@ def init_weights(m: nn.Module) -> None:
 
 
 class Trainer:
-    def __init__(self, model, loss_fn, optimizer, epochs: int, batch_size: int):
+    def __init__(self, model, loss_fn, optimizer,
+                 epochs, batch_size):
         self.model = model
         self.loss_fn = loss_fn
         self.grid = loss_fn.obs.grid
@@ -125,7 +128,7 @@ class Trainer:
         fig.canvas.draw()
         fig.canvas.flush_events()
 
-    def train(self, alphanet) -> None:
+    def train(self, alphanet, mask) -> None:
         fig, ax, artists = self._init_figure()
         pbar = tqdm(range(self.epochs))
         lr_reduced = False
@@ -135,7 +138,7 @@ class Trainer:
             batch_idx = torch.randperm(
                 self.model.samples["train"].size(0)
             )[: self.batch_size]
-            alphas = alphanet(self.grid)
+            alphas = alphanet(self.grid)*mask
             self.alpha_record.append(alphas)
 
             loss = self.loss_fn(
@@ -234,17 +237,19 @@ if __name__ == "__main__":
 
     # Observables and model
     my_action = actions.LatticeAction(beta=args.beta)
-    # my_obs = observables.OnePtFn(
-    #    N=N, latsize=args.latsize,
-    #    i=args.i, j=args.j,
-    #    coord=(0, 0),
-    #    action=my_action,
-    # )
-    my_obs = observables.TwoPtFn(
+    my_obs = observables.OnePtFn(
         N=N, latsize=args.latsize,
-        i=args.i, j=args.j, delta=args.delta,
-        coord=(0, 0), action=my_action,
+        i=args.i, j=args.j,
+        coord=(0, 0),
+        action=my_action,
     )
+    alpha_mask = periodic_box_mask(
+        args.latsize, (0, 0), radius=6).unsqueeze(-1)
+    # my_obs = observables.TwoPtFn(
+    #    N=N, latsize=args.latsize,
+    #    i=args.i, j=args.j, delta=args.delta,
+    #    coord=(0, 0), action=my_action,
+    # )
     model = HomogenousDeformations(N)
     model.samples = {"all": samples,
                      "train": samples[mask], "test": samples[~mask]}
@@ -270,7 +275,7 @@ if __name__ == "__main__":
     if not args.run:
         raise SystemExit(0)
 
-    trainer.train(alphanet)
+    trainer.train(alphanet, alpha_mask)
 
     # Pick best checkpoint from the final window
     window = trainer.test_var[-BEST_WINDOW:]
@@ -292,8 +297,12 @@ if __name__ == "__main__":
             "Ensure the test window falls entirely after the warmup period."
         )
 
-    fname = f"data/training_params_i{args.i}_j{args.j}_Nepochs{args.epochs}.pt"
-    torch.save(alphanet, fname)
+    fname = f"data/training_params_OPF_i{
+        args.i}_j{args.j}_Nepochs{args.epochs}.pt"
+    # fname = f"data/training_params_TPF_i{args.i}_j{args.j}_delta_{
+    #    args.delta[0]}_{args.delta[1]}_Nepochs{args.epochs}.pt"
+
+    # torch.save(alphanet, fname)
     # saved_data = torch.load(fname, weights_only=False)
     # saved_data[0, *args.delta] = analytic_loss_rat.item()
     # saved_data[1, *args.delta] = best_training_loss_rat.item()

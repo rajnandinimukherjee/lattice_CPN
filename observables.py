@@ -37,7 +37,8 @@ class OnePtFn:
 
     def __call__(self, model,
                  deform=False, alphas=None, batch_idx=slice(None),
-                 sampletype="all", **kwargs):
+                 sampletype="all", return_fields=False, return_jac=False,
+                 **kwargs):
 
         x = model.samples[sampletype]
         if sampletype == "train":
@@ -51,9 +52,16 @@ class OnePtFn:
             z = Z[..., ::2] + 1j * Z[..., 1::2]
             zconj = Z[..., ::2] - 1j * Z[..., 1::2]
 
+            if return_fields:
+                return z, zconj
+
             Sdiff = torch.exp(-self.action(z, conj=zconj, batched=True) +
                               self.action(x, batched=True))
             detJ = model.detJac(X, alphas)
+
+            if return_jac:
+                return detJ
+
             detJ = torch.prod(detJ.view(-1, self.N_lat), dim=-1)
 
             return self.observable(z, zconj)*detJ*Sdiff
@@ -103,7 +111,8 @@ class TwoPtFn:
 
     def __call__(self, model,
                  deform=False, alphas=None, batch_idx=slice(None),
-                 sampletype="all", **kwargs):
+                 sampletype="all", return_fields=False,
+                 return_jac=False, **kwargs):
 
         x = model.samples[sampletype]
         if sampletype == "train":
@@ -116,10 +125,15 @@ class TwoPtFn:
 
             z = Z[..., ::2] + 1j * Z[..., 1::2]
             zconj = Z[..., ::2] - 1j * Z[..., 1::2]
+            if return_fields:
+                return z, zconj
 
             Sdiff = torch.exp(-self.action(z, conj=zconj, batched=True) +
                               self.action(x, batched=True))
             detJ = model.detJac(X, alphas)
+            if return_jac:
+                return detJ
+
             detJ = torch.prod(detJ.view(-1, self.N_lat), dim=-1)
 
             return self.observable(z, zconj)*detJ*Sdiff

@@ -9,7 +9,7 @@ class LatticeAction():
 
     def __call__(self, fields, conj=None, local=False, sites=None, batched=False):
         if local and conj is None:
-            return self.beta*LocalEnergy(fields, sites)
+            return self.beta*LocalEnergy(fields, conj, sites)
         else:
             return self.beta*LatticeEnergy(fields, conj=conj, batched=batched)
 
@@ -22,20 +22,24 @@ def LatticeDdimAction(fields, beta, conj=None, local=False, sites=None, batched=
         return beta*LatticeEnergy(fields, conj=conj, batched=batched)
 
 
-def LocalEnergy(fields, sites):
-    latsize = fields.shape[:-1]
-    S_local = torch.zeros(
-        sites.shape[0], dtype=torch.cdouble, device=fields.device)
-    phi = fields[tuple(sites.T)]  # (N_sites, N+1)
-    phi_dag = phi.conj()
+def LocalEnergy(fields, sites, conj=None):
+    batch_shape = fields.shape[:-3]
+    latsize = fields.shape[-3:-1]
+    if conj is None:
+        conj = fields.conj()
+    S_local = torch.zeros(*batch_shape, sites.shape[0], dtype=torch.cdouble)
+    phi = fields[..., sites[:, 0], sites[:, 1], :]  # (N_sites, N+1)
+    phi_dag = conj[..., sites[:, 0], sites[:, 1], :]
 
     dirs = range(len(latsize))
     for mu in dirs:
         for shift in (+1, -1):
             nbr_sites = neighbor_indices(sites, mu, latsize, shift)
-            phi_nbr = fields[tuple(nbr_sites.T)]
-            t1dagt2 = (phi_dag * phi_nbr).sum(-1)
-            S_local += 1 - t1dagt2 * t1dagt2.conj()
+            phi_nbr = fields[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
+            phi_nbr_dag = conj[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
+            t1dagt2 = (phi_dag * phi_nbr).sum(-1).squeeze(-2)
+            t2dagt1 = (phi * phi_nbr_dag).sum(-1).squeeze(-2)
+            S_local += 1 - t1dagt2 * t2dagt1
 
     return S_local
 

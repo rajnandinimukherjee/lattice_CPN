@@ -1,3 +1,4 @@
+from CPN_utils import CNtoR2N
 from training_utils import bootstrap, periodic_box_mask
 from losses import VarianceLoss
 from networks import UNet
@@ -81,9 +82,12 @@ class Trainer:
             ev2_fill=ev2_fill,
         )
 
-    def _redraw(self, fig, ax, artists, epoch: int) -> None:
+    def _redraw(self, fig, ax, artists, epoch, moving_window=True):
         """Update all plot artists for the current epoch."""
-        xdata = list(range(epoch-50, epoch + 1))
+        if moving_window:
+            xdata = list(range(epoch-50, epoch + 1))
+        else:
+            xdata = list(range(50, epoch+1))
 
         exp_t = torch.tensor(self.train_exp)[xdata]
         std_t = torch.tensor(self.train_exp_err)[xdata]
@@ -128,7 +132,7 @@ class Trainer:
         fig.canvas.draw()
         fig.canvas.flush_events()
 
-    def train(self, alphanet, mask) -> None:
+    def train(self, alphanet, mask=1, **kwargs):
         fig, ax, artists = self._init_figure()
         pbar = tqdm(range(self.epochs))
         lr_reduced = False
@@ -177,7 +181,7 @@ class Trainer:
             self.train_exp_err.append(bootstrap(train_obs).var().item()**0.5)
 
             if warmed_up:
-                self._redraw(fig, ax, artists, epoch)
+                self._redraw(fig, ax, artists, epoch, **kwargs)
 
             current_loss = self.test_var[-1] if warmed_up else loss.item()
             pbar.set_description(
@@ -190,18 +194,18 @@ class Trainer:
         # plt.close("all")
 
 
-def load_samples(args) -> torch.Tensor:
+def load_samples(args):
     """Load lattice gauge configurations and return a complex128 tensor."""
     if args.source == "Raj":
         lat_str = "x".join(str(n) for n in args.latsize)
         configs = h5py.File(
             f"data/CP{args.N}_lat{lat_str}_b{args.beta:.1f}.h5", "r"
         )["configs"]
-        return torch.tensor(
+        return CNtoR2N(torch.tensor(
             configs["vectors"][2000::20], dtype=torch.complex128
-        )
+        ))
 
-    return (
+    return CNtoR2N(
         torch.from_file(
             "data/cpn_b4.0_L64_Nc3_big_ens.dat",
             shared=False,
@@ -218,7 +222,10 @@ if __name__ == "__main__":
 
     samples = load_samples(args)
     N_conf = len(samples)
-    lat_vol = args.latsize[0] * args.latsize[1]
+
+    # Action
+    my_action = actions.LatticeAction(args.beta, args.N, args.latsize)
+    volume = torch.tensor(args.latsize).prod().item()
 
     print("\n".join([
         "Ensemble details:",
@@ -226,8 +233,7 @@ if __name__ == "__main__":
         f"  size   : {args.latsize}",
         f"  beta   : {args.beta}",
         f"  N_conf : {N_conf}",
-        f"  E/V    : {actions.LatticeEnergy(samples,
-                                            batched=True).mean() / lat_vol:.6f}",
+        f"  E/V    : {my_action.energy(samples).mean()/volume:.6f}",
     ]))
 
     # Train / test split
@@ -236,7 +242,6 @@ if __name__ == "__main__":
     mask[train_idx] = True
 
     # Observables and model
-    my_action = actions.LatticeAction(beta=args.beta)
     my_obs = observables.OnePtFn(
         N=N, latsize=args.latsize,
         i=args.i, j=args.j,
@@ -275,7 +280,8 @@ if __name__ == "__main__":
     if not args.run:
         raise SystemExit(0)
 
-    trainer.train(alphanet, alpha_mask)
+    trainer.train(alphanet, moving_window=False)
+    # trainer.train(alphanet, alpha_mask)
 
     # Pick best checkpoint from the final window
     window = trainer.test_var[-BEST_WINDOW:]

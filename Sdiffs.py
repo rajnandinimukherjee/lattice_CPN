@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 from losses import VarianceLoss
 from deformations import HomogenousDeformations
 from argparsing import parseargs
+from CPN_utils import CNtoR2N
 import observables
 import actions
 import h5py
@@ -11,18 +12,18 @@ import matplotlib
 matplotlib.use("QtAgg")
 
 
-def load_samples(args) -> torch.Tensor:
-    """Load lattice gauge configurations and return a complex128 tensor."""
+def load_samples(args):
+    """Load configurations and return a real tensor."""
     if args.source == "Raj":
         lat_str = "x".join(str(n) for n in args.latsize)
         configs = h5py.File(
             f"data/CP{args.N}_lat{lat_str}_b{args.beta:.1f}.h5", "r"
         )["configs"]
-        return torch.tensor(
+        return CNtoR2N(torch.tensor(
             configs["vectors"][2000::20], dtype=torch.complex128
-        )
+        ))
 
-    return (
+    return CNtoR2N(
         torch.from_file(
             "data/cpn_b4.0_L64_Nc3_big_ens.dat",
             shared=False,
@@ -39,7 +40,10 @@ if __name__ == "__main__":
 
     samples = load_samples(args)
     N_conf = len(samples)
-    lat_vol = args.latsize[0] * args.latsize[1]
+
+    # Action
+    my_action = actions.LatticeAction(args.beta, args.N, args.latsize)
+    volume = torch.tensor(args.latsize).prod().item()
 
     print("\n".join([
         "Ensemble details:",
@@ -47,14 +51,14 @@ if __name__ == "__main__":
         f"  size   : {args.latsize}",
         f"  beta   : {args.beta}",
         f"  N_conf : {N_conf}",
-        f"  E/V    : {actions.LatticeEnergy(samples,
-                                            batched=True).mean() / lat_vol:.6f}",
+        f"  E/V    : {my_action.energy(samples).mean()/volume:.6f}",
     ]))
 
     sites = torch.tensor([[i, j] for i in range(args.latsize[0])
                          for j in range(args.latsize[1])])
     S_undef = args.beta * \
-        actions.LocalEnergy(samples, sites).view(*samples.shape[:-1]).mean(0)
+        my_action.local_energy(samples, sites).view(
+            *samples.shape[:-1]).mean(0)
 
     # Train / test split
     train_idx = torch.randperm(N_conf)[: int(args.split * N_conf)]
@@ -62,7 +66,6 @@ if __name__ == "__main__":
     mask[train_idx] = True
 
     # Observables and model
-    my_action = actions.LatticeAction(beta=args.beta)
     model = HomogenousDeformations(N)
     model.samples = {"all": samples,
                      "train": samples[mask], "test": samples[~mask]}
@@ -81,14 +84,14 @@ if __name__ == "__main__":
         args.i}_j{args.j}_Nepochs500.pt"
     OPF_alphas_masked = torch.load(fname, weights_only=False)
 
-    z, zconj = OPF(model, deform=True, alphas=OPF_alphas, return_fields=True)
+    Z = OPF(model, deform=True, alphas=OPF_alphas, return_fields=True)
     S_def = args.beta * \
-        actions.LocalEnergy(z, sites, conj=zconj).view(
+        my_action.local_energy(Z, sites).view(
             *samples.shape[:-1]).mean(0)
-    z, zconj = OPF(model, deform=True,
-                   alphas=OPF_alphas_masked, return_fields=True)
+    Z = OPF(model, deform=True,
+            alphas=OPF_alphas_masked, return_fields=True)
     S_def_masked = args.beta * \
-        actions.LocalEnergy(z, sites, conj=zconj).view(
+        my_action.local_energy(Z, sites).view(
             *samples.shape[:-1]).mean(0)
 
     S_diff = S_def-S_undef
@@ -105,9 +108,9 @@ if __name__ == "__main__":
     tpf_alphas = OPF_alphas+alpha_rolled
     tpf_alphas[..., 2] = (tpf_alphas[..., 0]+tpf_alphas[..., 1])/2
 
-    z, zconj = TPF(model, deform=True, alphas=tpf_alphas, return_fields=True)
+    Z = TPF(model, deform=True, alphas=tpf_alphas, return_fields=True)
     S_def2 = args.beta * \
-        actions.LocalEnergy(z, sites, conj=zconj).view(
+        my_action.local_energy(Z, sites).view(
             *samples.shape[:-1]).mean(0)
     S_diff2 = S_def2-S_undef
 
@@ -119,9 +122,9 @@ if __name__ == "__main__":
         args.i}_j{args.j}_delta_{args.delta[0]}_{args.delta[1]}_Nepochs200.pt"
     TPF_alphas = torch.load(fname, weights_only=False)
 
-    z, zconj = TPF(model, deform=True, alphas=TPF_alphas, return_fields=True)
+    Z = TPF(model, deform=True, alphas=TPF_alphas, return_fields=True)
     S_def_tpf = args.beta * \
-        actions.LocalEnergy(z, sites, conj=zconj).view(
+        my_action.local_energy(Z, sites).view(
             *samples.shape[:-1]).mean(0)
     S_diff_tpf = S_def_tpf-S_undef
 

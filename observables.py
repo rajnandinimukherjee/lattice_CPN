@@ -3,8 +3,14 @@ from math import prod
 
 import torch
 
-from CPN_utils import CNtoR2N
 import matplotlib.pyplot as plt
+
+
+def one_pt_fn(Z, i, j, coord):
+    Z_pt = Z[..., *coord, :].movedim(-1, 0)
+    Z_i = Z_pt[2*i]+1j*Z_pt[2*i+1]
+    Z_j_bar = Z_pt[2*j]-1j*Z_pt[2*j+1]
+    return Z_i*Z_j_bar
 
 
 class OnePtFn:
@@ -27,46 +33,33 @@ class OnePtFn:
         Op = r"z_"+str(self.i)+r"z^\dagger_"+str(self.j)
         return r"$"+Op+str(self.c1)+r"$"
 
-    def Q(self, z, zconj):
-        obs = z[..., *self.c1, self.i]*zconj[..., *self.c1, self.j]
-        return obs
-
-    def observable(self, z, zconj):
-        Q = self.Q(z, zconj)
-        return Q-Q.mean()
+    def observable(self, Z):
+        obs = one_pt_fn(Z, self.i, self.j, self.c1)
+        return obs-obs.mean()
 
     def __call__(self, model,
                  deform=False, alphas=None, batch_idx=slice(None),
                  sampletype="all", return_fields=False, return_jac=False,
                  **kwargs):
 
-        x = model.samples[sampletype]
+        X = model.samples[sampletype]
         if sampletype == "train":
-            x = x[batch_idx]
+            X = X[batch_idx]
 
         if deform:
-
-            X = CNtoR2N(x)
             Z = model.complexify(X, alphas)
-
-            z = Z[..., ::2] + 1j * Z[..., 1::2]
-            zconj = Z[..., ::2] - 1j * Z[..., 1::2]
-
             if return_fields:
-                return z, zconj
+                return Z
 
-            Sdiff = torch.exp(-self.action(z, conj=zconj, batched=True) +
-                              self.action(x, batched=True))
+            Sdiff = torch.exp(-self.action(Z) + self.action(X))
             detJ = model.detJac(X, alphas)
-
             if return_jac:
                 return detJ
 
             detJ = torch.prod(detJ.view(-1, self.N_lat), dim=-1)
-
-            return self.observable(z, zconj)*detJ*Sdiff
+            return self.observable(Z)*detJ*Sdiff
         else:
-            return self.observable(x, x.conj())
+            return self.observable(X)
 
 
 class TwoPtFn:
@@ -96,49 +89,36 @@ class TwoPtFn:
         Op = r"z_"+str(self.i)+r"z^\dagger_"+str(self.j)
         return r"$"+Op+str(self.c1)+r"["+Op+r"]^\dagger"+str(self.c2)+r"$"
 
-    def O(self, z, zconj):
-        obs = zconj[..., *self.c2, self.i]*z[..., *self.c2, self.j]
-        return obs
-
-    def Q(self, z, zconj):
-        obs = z[..., *self.c1, self.i]*zconj[..., *self.c1, self.j]
-        return obs
-
-    def observable(self, z, zconj):
-        O = self.O(z, zconj)
-        Q = self.Q(z, zconj)
-        return O*Q  # -O.mean()*Q.mean()
+    def observable(self, Z):
+        opf1 = one_pt_fn(Z, self.i, self.j, self.c1)
+        opf2_dag = one_pt_fn(Z, self.j, self.i, self.c2)
+        obs = opf1*opf2_dag
+        return obs - obs.mean()
 
     def __call__(self, model,
                  deform=False, alphas=None, batch_idx=slice(None),
                  sampletype="all", return_fields=False,
                  return_jac=False, **kwargs):
 
-        x = model.samples[sampletype]
+        X = model.samples[sampletype]
         if sampletype == "train":
-            x = x[batch_idx]
+            X = X[batch_idx]
 
         if deform:
 
-            X = CNtoR2N(x)
             Z = model.complexify(X, alphas)
-
-            z = Z[..., ::2] + 1j * Z[..., 1::2]
-            zconj = Z[..., ::2] - 1j * Z[..., 1::2]
             if return_fields:
-                return z, zconj
+                return Z
 
-            Sdiff = torch.exp(-self.action(z, conj=zconj, batched=True) +
-                              self.action(x, batched=True))
+            Sdiff = torch.exp(-self.action(Z) + self.action(X))
             detJ = model.detJac(X, alphas)
             if return_jac:
                 return detJ
 
             detJ = torch.prod(detJ.view(-1, self.N_lat), dim=-1)
-
-            return self.observable(z, zconj)*detJ*Sdiff
+            return self.observable(Z)*detJ*Sdiff
         else:
-            return self.observable(x, x.conj())
+            return self.observable(X)
 
 
 class invSquareFunc:

@@ -4,70 +4,99 @@ import pdb
 
 class LatticeAction():
 
-    def __init__(self, beta):
-        self.beta = beta
+    def __init__(self, beta, N, latsize, style="quartic"):
+        self.beta, self.N = beta, N
+        blocks = [torch.tensor([[0, -1], [1, 0]])] * (N+1)
+        self.omega = torch.block_diag(*blocks)
+        self.latsize = latsize
 
-    def __call__(self, fields, conj=None, local=False, sites=None, batched=False):
-        if local and conj is None:
-            return self.beta*LocalEnergy(fields, conj, sites)
+        assert style in ["quartic", "gauge"]
+        if style == "quartic":
+            self.action = self.quartic_action
+            self.energy = self.lattice_quartic_energy
+            self.local_energy = self.local_quartic_energy
+
+    def __call__(self, fields, **kwargs):
+        assert fields.shape[-1] == 2*(self.N+1), "fields must be in real rep"
+        return self.action(fields, **kwargs)
+
+    def quartic_action(self, fields, local=False, **kwargs):
+        if local:
+            return self.beta*self.local_quartic_energy(fields, **kwargs)
         else:
-            return self.beta*LatticeEnergy(fields, conj=conj, batched=batched)
+            return self.beta*self.lattice_quartic_energy(fields, **kwargs)
 
+    def gauge_action(self, fields, local=False, **kwargs):
+        pass
 
-def LatticeDdimAction(fields, beta, conj=None, local=False, sites=None, batched=False):
+    def local_quartic_energy(self, fields, sites):
+        batch_shape = fields.shape[:-3]
+        E_local = torch.zeros(
+            *batch_shape, sites.shape[0], dtype=torch.cdouble)
+        Z = fields[..., sites[:, 0], sites[:, 1], :]  # (N_sites, N+1)
+        omega = self.omega.to(Z.dtype)
 
-    if local and conj is None:
-        return beta*LocalEnergy(fields, sites)
-    else:
-        return beta*LatticeEnergy(fields, conj=conj, batched=batched)
+        dirs = range(len(self.latsize))
+        for mu in dirs:
+            for shift in (+1, -1):
+                nbr_sites = neighbor_indices(sites, mu, self.latsize, shift)
+                Z_nbr = fields[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
+                OmegaZ_nbr = Z_nbr@omega.T
+                term1 = ((Z*Z_nbr).sum(-1))**2
+                term2 = ((Z*OmegaZ_nbr).sum(-1))**2
+                E_local += 1 - (term1 + term2)
 
+        return E_local
 
-def LocalEnergy(fields, sites, conj=None):
-    batch_shape = fields.shape[:-3]
-    latsize = fields.shape[-3:-1]
-    if conj is None:
-        conj = fields.conj()
-    S_local = torch.zeros(*batch_shape, sites.shape[0], dtype=torch.cdouble)
-    phi = fields[..., sites[:, 0], sites[:, 1], :]  # (N_sites, N+1)
-    phi_dag = conj[..., sites[:, 0], sites[:, 1], :]
+    def lattice_quartic_energy(self, Z):
+        # Z are the fields
+        E = torch.zeros(Z.shape[:-1])
+        N_ax = len(Z.shape)-1
+        dirs = range(N_ax-len(self.latsize), N_ax)
+        omega = self.omega.to(Z.dtype)
+        for mu in dirs:
+            for shift in (+1, -1):
+                Z_nbr = torch.roll(Z, shift, dims=mu)
+                OmegaZ_nbr = Z_nbr@omega.T
+                term1 = ((Z*Z_nbr).sum(-1))**2
+                term2 = ((Z*OmegaZ_nbr).sum(-1))**2
+                E = E + 1 - (term1+term2)
+        return torch.sum(E, dim=tuple(dirs))
 
-    dirs = range(len(latsize))
-    for mu in dirs:
-        for shift in (+1, -1):
-            nbr_sites = neighbor_indices(sites, mu, latsize, shift)
-            phi_nbr = fields[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
-            phi_nbr_dag = conj[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
-            t1dagt2 = (phi_dag * phi_nbr).sum(-1).squeeze(-2)
-            t2dagt1 = (phi * phi_nbr_dag).sum(-1).squeeze(-2)
-            S_local += 1 - t1dagt2 * t2dagt1
+    def local_gauge_energy(self, fields, sites):
+        Z, thetas = fields
+        batch_shape = Z.shape[:-3]
+        E_local = torch.zeros(
+            *batch_shape, sites.shape[0], dtype=torch.cdouble)
+        Z = Z[..., sites[:, 0], sites[:, 1], :]  # (N_sites, N+1)
+        thetas = thetas[..., sites[:, 0], sites[:, 1]]  # (N_sites, N+1)
+        omega = self.omega.to(Z.dtype)
 
-    return S_local
+        dirs = range(len(self.latsize))
+        for mu in dirs:
+            for shift in (+1, -1):
+                nbr_sites = neighbor_indices(sites, mu, self.latsize, shift)
+                Z_nbr = fields[..., nbr_sites[:, 0], nbr_sites[:, 1], :]
+                OmegaZ_nbr = Z_nbr@omega.T
+                term1 = ((Z*Z_nbr).sum(-1))*torch.cos(shift*thetas)
+                term2 = ((Z*OmegaZ_nbr).sum(-1))*torch.sin(shift*thetas)
+                E_local += 1 - (term1 + term2)
+        return E_local
 
-
-def LatticeEnergy(fields, conj=None, batched=False):
-    latsize = fields.shape[:-1]
-
-    S = torch.zeros(latsize, dtype=torch.cdouble)
-    if batched:
-        latsize = latsize[1:]
-
-    t1 = fields
-    t1dag = fields.conj() if conj is None else conj
-
-    dirs = range(1, 1+len(latsize)) if batched else range(len(latsize))
-
-    for mu in dirs:
-        t2 = torch.roll(t1, -1, dims=mu)
-        t2dag = torch.roll(t1dag, -1, dims=mu)
-
-        t1dagt2 = (t1dag*t2).sum(-1)
-        t2dagt1 = (t2dag*t1).sum(-1)
-
-        try:
-            S = S + 1 - t1dagt2*t2dagt1
-        except RuntimeError:
-            pdb.set_trace()
-    return torch.sum(S, dim=tuple(dirs))
+    def lattice_gauge_energy(self, fields):
+        Z, thetas = fields
+        E = torch.zeros(Z.shape[:-1])
+        N_ax = len(Z.shape)-1
+        dirs = range(N_ax-len(self.latsize), N_ax)
+        omega = self.omega.to(Z.dtype)
+        for mu in dirs:
+            for shift in (+1, -1):
+                Z_nbr = torch.roll(Z, shift, dims=mu)
+                OmegaZ_nbr = Z_nbr@omega.T
+                term1 = ((Z*Z_nbr).sum(-1))*torch.cos(shift*thetas)
+                term2 = ((Z*OmegaZ_nbr).sum(-1))*torch.sin(shift*thetas)
+                E = E + 1 - (term1+term2)
+        return torch.sum(E, dim=tuple(dirs))
 
 
 def neighbor_indices(sites, mu, latsize, shift):

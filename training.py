@@ -132,7 +132,7 @@ class Trainer:
         fig.canvas.draw()
         fig.canvas.flush_events()
 
-    def train(self, alphanet, mask=1, **kwargs):
+    def train(self, alphanet, mask=None, plot=True, **kwargs):
         fig, ax, artists = self._init_figure()
         pbar = tqdm(range(self.epochs))
         lr_reduced = False
@@ -142,7 +142,9 @@ class Trainer:
             batch_idx = torch.randperm(
                 self.model.samples["train"].size(0)
             )[: self.batch_size]
-            alphas = alphanet(self.grid)*mask
+            alphas = alphanet(self.grid)
+            if mask is not None:
+                alphas = alphas*mask
             self.alpha_record.append(alphas)
 
             loss = self.loss_fn(
@@ -160,11 +162,11 @@ class Trainer:
                 self.test_exp_err.append(bootstrap(test_obs).var().item()**0.5)
 
                 # Reduce lr if test_var < init_var
-                lr_ratio = self.test_var[-1]/self.loss_fn.initial_var
-                if (not lr_reduced) and (lr_ratio < 1.0):
-                    for param_group in self.optimizer.param_groups:
-                        param_group['lr'] = LEARNING_RATE/10
-                        lr_reduced = True
+                # lr_ratio = self.test_var[-1]/self.loss_fn.initial_var
+                # if (not lr_reduced) and (lr_ratio < 1.0):
+                #    for param_group in self.optimizer.param_groups:
+                #        param_group['lr'] = LEARNING_RATE/10
+                #        lr_reduced = True
 
             else:
                 self.test_exp.append(float("nan"))
@@ -180,7 +182,7 @@ class Trainer:
             self.train_var.append(train_obs.var(correction=0).item())
             self.train_exp_err.append(bootstrap(train_obs).var().item()**0.5)
 
-            if warmed_up:
+            if warmed_up and plot:
                 self._redraw(fig, ax, artists, epoch, **kwargs)
 
             current_loss = self.test_var[-1] if warmed_up else loss.item()
@@ -280,7 +282,7 @@ if __name__ == "__main__":
     if not args.run:
         raise SystemExit(0)
 
-    trainer.train(alphanet, moving_window=False)
+    trainer.train(alphanet, plot=False)
     # trainer.train(alphanet, alpha_mask)
 
     # Pick best checkpoint from the final window

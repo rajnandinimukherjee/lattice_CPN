@@ -28,14 +28,14 @@ class FlowedDeformations(nn.Module):
 class HomogenousDeformations(nn.Module):
     name = "HomogDef"
 
-    def __init__(self, N):
+    def __init__(self, N, device='cpu'):
         super(HomogenousDeformations, self).__init__()
         self.N = N
         self.DOF = N+1
-        self.eye = torch.eye(2*self.DOF)
+        self.eye = torch.eye(2*self.DOF).to(device)
 
         blocks = [torch.tensor([[0, -1], [1, 0]])] * (N+1)
-        self.omega = torch.block_diag(*blocks).to(torch.float64)
+        self.omega = torch.block_diag(*blocks).to(torch.float32).to(device)
 
     def __repr__(self):
         return self.name

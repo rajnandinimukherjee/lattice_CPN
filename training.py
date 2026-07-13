@@ -14,22 +14,21 @@ import torch
 import h5py
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use("QtAgg")
+#matplotlib.use("QtAgg")
 
 
 WARMUP_EPOCHS = 50
 BEST_WINDOW = 20
 LEARNING_RATE = 1e-3
-WEIGHT_INIT_STD = 1e-3
-
+WEIGHT_INIT_STD = 1e-6
 
 def init_weights(m: nn.Module) -> None:
-    """Small normal weights and zero bias for Linear layers."""
-    if isinstance(m, nn.Linear):
-        nn.init.normal_(m.weight, mean=0.0, std=WEIGHT_INIT_STD)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-
+        if isinstance(m, (nn.Linear,
+                          nn.Conv2d,
+                          nn.ConvTranspose2d)):
+            nn.init.normal_(m.weight, mean=0.0, std=WEIGHT_INIT_STD)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
 class Trainer:
     def __init__(self, model, loss_fn, optimizer,
@@ -222,7 +221,7 @@ if __name__ == "__main__":
     args, _ = parseargs()
     N = args.N
 
-    samples = load_samples(args)
+    samples = load_samples(args).to(torch.float32)
     N_conf = len(samples)
 
     # Action
@@ -282,8 +281,8 @@ if __name__ == "__main__":
     if not args.run:
         raise SystemExit(0)
 
-    trainer.train(alphanet, plot=False)
-    # trainer.train(alphanet, alpha_mask)
+    #trainer.train(alphanet, plot=False)
+    trainer.train(alphanet, alpha_mask, plot=False)
 
     # Pick best checkpoint from the final window
     window = trainer.test_var[-BEST_WINDOW:]

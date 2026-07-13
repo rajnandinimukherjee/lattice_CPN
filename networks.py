@@ -9,11 +9,11 @@ class AlphaNet(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=16):
         super(AlphaNet, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim, dtype=torch.double),
+            nn.Linear(input_dim, hidden_dim, dtype=torch.float32),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim, dtype=torch.double),
+            nn.Linear(hidden_dim, hidden_dim, dtype=torch.float32),
             nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim, dtype=torch.double)
+            nn.Linear(hidden_dim, output_dim, dtype=torch.float32)
         )
         self.hd = hidden_dim
 
@@ -29,11 +29,11 @@ class DoubleConv(nn.Module):
         layers = [
             nn.Conv2d(input_dim, output_dim, kernel_size=3,
                       padding=1, padding_mode="circular",
-                      dtype=torch.double),
+                      dtype=torch.float32),
             nn.ReLU(inplace=True),
             nn.Conv2d(output_dim, output_dim, kernel_size=3,
                       padding=1, padding_mode="circular",
-                      dtype=torch.double)
+                      dtype=torch.float32)
         ]
 
         # Conditionally add the last ReLU
@@ -71,7 +71,7 @@ class DecBlock(nn.Module):
         self.upsample = nn.ConvTranspose2d(
             # (input_dim,H,W) -> (output_dim, 2H, 2W)
             in_channels=input_dim, out_channels=output_dim,
-            kernel_size=2, stride=2, padding=0, dtype=torch.double)
+            kernel_size=2, stride=2, padding=0, dtype=torch.float32)
         self.conv = DoubleConv(2*output_dim, output_dim)
 
     def forward(self, inputs, to_concat):
@@ -99,7 +99,7 @@ class UNet(nn.Module):
 
         self.output = nn.Conv2d(hd, output_dim, kernel_size=3,
                                 padding_mode="circular", padding=1,
-                                dtype=torch.double)
+                                dtype=torch.float32)
 
     def forward(self, X):
         x = X.permute(2, 0, 1).unsqueeze(0)

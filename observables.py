@@ -16,7 +16,7 @@ def one_pt_fn(Z, i, j, coord):
 class OnePtFn:
 
     def __init__(self, N, latsize, i=0, j=0, coord=(8, 8),
-                 action=None):
+                 action=None, device='cpu'):
         assert (i <= N and j <= N), f"i, j need to be <={N}"
         self.i = i
         self.j = j
@@ -24,8 +24,9 @@ class OnePtFn:
         self.c1 = coord
         self.action = action
         self.N_lat = prod(self.latsize)
+        self.device=device
 
-        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.double)
+        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.float32).to(device)
         self.grid[*self.c1, i] += 1
         self.grid[*self.c1, j] += 1
 
@@ -66,7 +67,7 @@ class TwoPtFn:
 
     def __init__(self, N, latsize, i=0, j=0, coord=(8, 8),
                  delta=(0, 1), trans_inv=False, action=None,
-                 myAlphaScale=0.3):
+                 myAlphaScale=0.3, device='cpu'):
         assert (i <= N and j <= N), f"i, j need to be <={N}"
         self.i = i
         self.j = j
@@ -76,13 +77,14 @@ class TwoPtFn:
         self.c2 = tuple(map(sum, zip(coord, self.delta)))
         self.action = action
         self.N_lat = prod(self.latsize)
+        self.device = device
 
-        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.double)
+        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.float32).to(device)
         self.grid[*self.c1, i] += 1
         self.grid[*self.c1, j] += 1
         self.grid[*self.c2, (N+1)+i] += 1
         self.grid[*self.c2, (N+1)+j] += 1
-        self.invSqFunc = invSquareFunc(latsize, N)
+        self.invSqFunc = invSquareFunc(latsize, N).to(device)
         self.invSqAlphas = myAlphaScale*self.invSqFunc(self.c1, self.c2, i, j)
 
     def __repr__(self):
@@ -151,6 +153,6 @@ class invSquareFunc:
         dsrc2 = (self.wrap(src_diffs) ** 2).sum(dim=ldims)
         dsnk2 = (self.wrap(snk_diffs) ** 2).sum(dim=ldims)
         field = 1.0 / (dsrc2 + 1.0) - 1.0 / (dsnk2 + 1.0)
-        A = torch.zeros(*self.latsize, self.N+1, dtype=torch.double)
+        A = torch.zeros(*self.latsize, self.N+1, dtype=torch.float32)
         A[..., i], A[..., j] = field, -field
         return A

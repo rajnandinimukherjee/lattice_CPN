@@ -24,9 +24,10 @@ class OnePtFn:
         self.c1 = coord
         self.action = action
         self.N_lat = prod(self.latsize)
-        self.device=device
+        self.device = device
 
-        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.float32).to(device)
+        self.grid = torch.zeros(
+            *latsize, 2*(N+1), dtype=torch.float32).to(device)
         self.grid[*self.c1, i] += 1
         self.grid[*self.c1, j] += 1
 
@@ -79,13 +80,15 @@ class TwoPtFn:
         self.N_lat = prod(self.latsize)
         self.device = device
 
-        self.grid = torch.zeros(*latsize, 2*(N+1), dtype=torch.float32).to(device)
+        self.grid = torch.zeros(
+            *latsize, 2*(N+1), dtype=torch.float32).to(device)
         self.grid[*self.c1, i] += 1
         self.grid[*self.c1, j] += 1
         self.grid[*self.c2, (N+1)+i] += 1
         self.grid[*self.c2, (N+1)+j] += 1
-        self.invSqFunc = invSquareFunc(latsize, N).to(device)
-        self.invSqAlphas = myAlphaScale*self.invSqFunc(self.c1, self.c2, i, j)
+        self.invSqFunc = invSquareFunc(latsize, N)
+        self.invSqAlphas = myAlphaScale * \
+            self.invSqFunc(self.c1, self.c2, i, j).to(device)
 
     def __repr__(self):
         Op = r"z_"+str(self.i)+r"z^\dagger_"+str(self.j)

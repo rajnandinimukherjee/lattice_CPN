@@ -9,6 +9,7 @@ import h5py
 import pdb
 import torch
 import matplotlib
+from training_utils import bootstrap
 matplotlib.use("QtAgg")
 
 
@@ -38,7 +39,7 @@ if __name__ == "__main__":
     args, _ = parseargs()
     N = args.N
 
-    samples = load_samples(args)
+    samples = load_samples(args).to(torch.float32)
     N_conf = len(samples)
 
     # Action
@@ -76,13 +77,14 @@ if __name__ == "__main__":
         coord=(0, 0),
         action=my_action,
     )
+
     fname = f"data/training_params_OPF_i{
         args.i}_j{args.j}_Nepochs500.pt"
-    OPF_alphas = torch.load(fname, weights_only=False)
+    OPF_alphas = torch.load(fname, weights_only=False).to(torch.float32)
 
     fname = f"data/training_params_OPF_masked_i{
         args.i}_j{args.j}_Nepochs500.pt"
-    OPF_alphas_masked = torch.load(fname, weights_only=False)
+    OPF_alphas_masked = torch.load(fname, weights_only=False).to(torch.float32)
 
     Z = OPF(model, deform=True, alphas=OPF_alphas, return_fields=True)
     S_def = args.beta * \
@@ -120,7 +122,7 @@ if __name__ == "__main__":
 
     fname = f"data/training_params_TPF_i{
         args.i}_j{args.j}_delta_{args.delta[0]}_{args.delta[1]}_Nepochs200.pt"
-    TPF_alphas = torch.load(fname, weights_only=False)
+    TPF_alphas = torch.load(fname, weights_only=False).to(torch.float32)
 
     Z = TPF(model, deform=True, alphas=TPF_alphas, return_fields=True)
     S_def_tpf = args.beta * \

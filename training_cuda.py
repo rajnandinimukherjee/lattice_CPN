@@ -14,7 +14,7 @@ import torch
 import h5py
 import matplotlib.pyplot as plt
 import matplotlib
-#matplotlib.use("QtAgg")
+# matplotlib.use("QtAgg")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -35,9 +35,10 @@ def init_weights(m: nn.Module) -> None:
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
+
 class Trainer:
     def __init__(self, model, loss_fn, optimizer,
-                              epochs, batch_size, device):
+                 epochs, batch_size, device):
         self.model = model
         self.loss_fn = loss_fn
         self.grid = loss_fn.obs.grid
@@ -145,9 +146,9 @@ class Trainer:
         for epoch in range(self.epochs):
             self.optimizer.zero_grad()
             batch_idx = torch.randperm(
-                        self.model.samples["train"].size(0),
-                            device=self.device
-                            )[: self.batch_size]
+                self.model.samples["train"].size(0),
+                device=self.device
+            )[: self.batch_size]
             alphas = alphanet(self.grid.to(self.device))
             if mask is not None:
                 alphas = alphas*mask
@@ -168,11 +169,11 @@ class Trainer:
                 self.test_exp_err.append(bootstrap(test_obs).var().item()**0.5)
 
                 # Reduce lr if test_var < init_var
-                #lr_ratio = self.test_var[-1]/self.loss_fn.initial_var
-                #if (not lr_reduced) and (lr_ratio < 0.9):
-                #   for param_group in self.optimizer.param_groups:
-                #       param_group['lr'] = LEARNING_RATE/10
-                #       lr_reduced = True
+                lr_ratio = self.test_var[-1]/self.loss_fn.initial_var
+                if (not lr_reduced) and (lr_ratio < 0.9):
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = LEARNING_RATE/10
+                        lr_reduced = True
 
             else:
                 self.test_exp.append(float("nan"))
@@ -232,7 +233,8 @@ if __name__ == "__main__":
     N_conf = len(samples)
 
     # Action
-    my_action = actions.LatticeAction(args.beta, args.N, args.latsize, device=device)
+    my_action = actions.LatticeAction(
+        args.beta, args.N, args.latsize, device=device)
     volume = torch.tensor(args.latsize).prod().item()
 
     print("\n".join([
@@ -258,8 +260,8 @@ if __name__ == "__main__":
         device=device,
     )
     alpha_mask = periodic_box_mask(
-                args.latsize, (0, 0), radius=6
-                ).unsqueeze(-1).to(device)
+        args.latsize, (0, 0), radius=6
+    ).unsqueeze(-1).to(device)
     # my_obs = observables.TwoPtFn(
     #    N=N, latsize=args.latsize,
     #    i=args.i, j=args.j, delta=args.delta,
@@ -271,22 +273,22 @@ if __name__ == "__main__":
 
     loss_fn = VarianceLoss(model, samples, N, my_obs)
     alphanet = UNet(
-                input_dim=loss_fn.obs.grid.shape[-1],
-                    output_dim=model.DOF,
-                    ).to(device)
+        input_dim=loss_fn.obs.grid.shape[-1],
+        output_dim=model.DOF,
+    ).to(device)
     alphanet.apply(init_weights)
 
-    optimizer = optim.Adam(alphanet.parameters(), 
+    optimizer = optim.Adam(alphanet.parameters(),
                            lr=LEARNING_RATE,
                            eps=1e-6)
     trainer = Trainer(
-                model,
-                loss_fn,
-                optimizer,
-                args.epochs,
-                args.batch_size,
-                device,
-                )
+        model,
+        loss_fn,
+        optimizer,
+        args.epochs,
+        args.batch_size,
+        device,
+    )
 
     # Pre-training observable statistics
     print(f"<O> = {loss_fn.target_exp:.6f},\tVar(O) = {
@@ -299,7 +301,7 @@ if __name__ == "__main__":
     if not args.run:
         raise SystemExit(0)
 
-    #trainer.train(alphanet, plot=False)
+    # trainer.train(alphanet, plot=False)
     trainer.train(alphanet, alpha_mask, plot=False)
 
     # Pick best checkpoint from the final window

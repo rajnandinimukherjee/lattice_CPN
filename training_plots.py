@@ -83,7 +83,9 @@ if __name__ == "__main__":
     opf_exp_err = bootstrap(obs).var().item()**0.5
 
     fname = "data/training_data_OPF_i0_j1_Nepochs280.pt"
+    f2name = "data/training_data_OPF_masked_i0_j1_Nepochs280.pt"
     data = torch.load(fname, weights_only=False)
+    data2 = torch.load(f2name, weights_only=False)
 
     fig, ax = plt.subplots(
         nrows=2, ncols=1, sharex=True,
@@ -94,7 +96,7 @@ if __name__ == "__main__":
     ax[0].set_ylabel("exp")
     ax[1].set_ylabel("var")
     ax[1].set_xlabel("epoch")
-    fig.suptitle(r"$z_0z_1^*(0,0)$, one-pt-fn unconstrained deformations")
+    fig.suptitle(r"$z_0z_1^*(0,0)$, one-pt-fn deformations")
 
     xdata = list(range(50, 280))
     mid, err = data["train_exp"][xdata], data["train_exp_err"][xdata]
@@ -102,6 +104,12 @@ if __name__ == "__main__":
                        (mid-err).numpy(),
                        (mid+err).numpy(),
                        color="r", alpha=0.4
+                       )
+    mid, err = data2["train_exp"][xdata], data2["train_exp_err"][xdata]
+    ax[0].fill_between(xdata,
+                       (mid-err).numpy(),
+                       (mid+err).numpy(),
+                       color="b", alpha=0.4
                        )
     # mid, err = data["test_exp"][xdata], data["test_exp_err"][xdata]
     # ax[0].fill_between(xdata,
@@ -115,10 +123,13 @@ if __name__ == "__main__":
                   )
     ax[0].axhline(opf_exp, color="k")
     ax[0].plot(xdata, data["train_exp"][xdata], color="r")
+    ax[0].plot(xdata, data2["train_exp"][xdata], color="b")
     # ax[0].plot(xdata, data["test_exp"][xdata], color="b")
 
     ax[1].axhline(opf_var, color="k", label="undeformed")
     ax[1].plot(xdata, data["train_var"][xdata], color="r", label="deformed")
+    ax[1].plot(xdata, data2["train_var"][xdata],
+               color="b", label="deformed with BCs")
     # ax[1].plot(xdata, data["test_var"][xdata], color="b")
     ax[1].legend()
 

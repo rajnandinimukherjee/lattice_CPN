@@ -1,58 +1,335 @@
-from CPN_utils import CNtoR2N
-from training_utils import bootstrap, periodic_box_mask
-from losses import VarianceLoss
-from networks import UNet
-from deformations import HomogenousDeformations
-from argparsing import parseargs
-import observables
-import actions
-import pdb
-from tqdm import tqdm
-import torch.optim as optim
-import torch.nn as nn
-import torch
-import h5py
+from __future__ import annotations
+
+import time
+from collections.abc import Mapping, Sequence
+from os import PathLike
+from typing import Any
+
 import matplotlib.pyplot as plt
-import matplotlib
-#matplotlib.use("QtAgg")
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
+
+WEIGHT_INIT_STD = 1e-3
 
 
-WARMUP_EPOCHS = 50
-BEST_WINDOW = 20
-LEARNING_RATE = 1e-3
-WEIGHT_INIT_STD = 1e-6
+def periodic_box_mask(
+    lattice: Sequence[int],
+    center: Sequence[int],
+    radius: int | float,
+) -> torch.Tensor:
+    """Return a periodic boolean mask around ``center`` on a lattice."""
+    if len(lattice) != len(center):
+        raise ValueError(
+            "lattice and center must have the same number of dimensions")
+
+    mask = torch.ones(tuple(lattice), dtype=torch.bool)
+
+    for L, c, dim in zip(lattice, center, range(len(lattice))):
+        x = torch.arange(L)
+        d = torch.minimum((x - c) % L, (c - x) % L)
+
+        # Reshape so this dimension broadcasts against all others
+        shape = [1] * len(lattice)
+        shape[dim] = L
+
+        mask &= d.reshape(shape) <= radius
+
+    return mask
+
+
+def st_dev(
+    data: torch.Tensor,
+    mean: torch.Tensor | None = None,
+    **kwargs: Any,
+) -> torch.Tensor:
+    """Return the population standard deviation over the first axis."""
+
+    n = len(data)
+    if mean is None:
+        mean = torch.mean(data, dim=0)
+    return (torch.sum((data - mean) ** 2, dim=0) / n) ** 0.5
+
+
+def bootstrap(data: torch.Tensor, Nboot: int = 100) -> torch.Tensor:
+    """Return bootstrap estimates of the mean over the first axis."""
+    if data.shape[0] == 0:
+        raise ValueError("cannot bootstrap an empty tensor")
+    indices = torch.randint(
+        data.shape[0],
+        size=(Nboot, data.shape[0]),
+        device=data.device,
+    )
+    return data[indices].mean(dim=1)
+
+
+def plot_training(
+    trainer: Trainer,
+    fname: str | PathLike[str] | None = None,
+    show: bool = True,
+    plot_label: str = "",
+    plot_error: bool = True,
+) -> tuple[Any, Any]:
+    """Plot the recorded training and validation expectation and variance."""
+    i = getattr(trainer.loss_fn.obs, "i", "")
+    j = getattr(trainer.loss_fn.obs, "j", "")
+    sub_str = f"{i}{j}"
+
+    for attr in [
+        "train_exp",
+        "train_var",
+        "train_exp_err",
+        "test_exp",
+        "test_var",
+        "test_exp_err",
+    ]:
+        setattr(trainer, attr, torch.as_tensor(getattr(trainer, attr)))
+
+    fig, ax = plt.subplots(nrows=2, sharex=True, figsize=(3, 5))
+
+    ax[0].plot(range(trainer.epochs), trainer.train_exp,
+               label="train", c="tab:blue")
+    ax[0].plot(range(trainer.epochs), trainer.test_exp,
+               label="test", c="tab:orange")
+    ax[0].axhline(trainer.loss_fn.target_exp, c="k", label="undeformed")
+    ax[0].set_ylabel(
+        r"$\mathrm{Re}\left[\mathtt{Exp}Q_{" + sub_str + r"}\right]$")
+
+    if plot_error:
+        ax[0].fill_between(
+            range(trainer.epochs),
+            trainer.train_exp + trainer.train_exp_err,
+            trainer.train_exp - trainer.train_exp_err,
+            color="tab:blue",
+            alpha=0.3,
+        )
+        ax[0].fill_between(
+            range(trainer.epochs),
+            trainer.test_exp + trainer.test_exp_err,
+            trainer.test_exp - trainer.test_exp_err,
+            color="tab:orange",
+            alpha=0.3,
+        )
+        ax[0].fill_between(
+            range(trainer.epochs),
+            trainer.loss_fn.target_exp + trainer.loss_fn.exp_err,
+            trainer.loss_fn.target_exp - trainer.loss_fn.exp_err,
+            color="k",
+            alpha=0.1,
+        )
+
+    handles, labels = ax[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=3, framealpha=1.0)
+
+    ax[1].plot(range(trainer.epochs), trainer.train_var, label="train")
+    ax[1].plot(range(trainer.epochs), trainer.test_var, label="test")
+    ax[1].axhline(trainer.loss_fn.initial_var, c="k", label="undeformed")
+    ax[1].set_ylabel(r"$\mathtt{Var}\left[Q_{" + sub_str + r"}\right]$")
+
+    # ax[0].set_ylim([trainer.loss_fn.target_exp*0.9,
+    #               trainer.loss_fn.target_exp*1.1])
+    ymin, ymax = ax[1].get_ylim()
+    ax[1].set_ylim([ymin, trainer.loss_fn.initial_var * 1.1])
+
+    fig.text(0.95, 0.5, plot_label, va="center", ha="left", rotation=270)
+
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0)
+    if fname is not None:
+        fig.savefig(fname, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig, ax
+
+
+def plot_exported_training(
+    data: Mapping[str, Any] | str | PathLike[str],
+    fname: str | PathLike[str] | None = None,
+    show: bool = True,
+    plot_label: str = "",
+    plot_error: bool = True,
+) -> tuple[Any, Any]:
+    """Plot training data exported by :meth:`Trainer.export_training_data`.
+
+    ``data`` may be the exported dictionary or a filename produced with
+    ``numpy.save``.  Unlike the live plot, every recorded epoch is shown and
+    the variance panel uses a logarithmic y-axis.
+    """
+    if isinstance(data, (str, bytes)) or hasattr(data, "__fspath__"):
+        data = np.load(data, allow_pickle=True).item()
+
+    def values(key: str) -> np.ndarray:
+        """Convert one exported series to a floating NumPy array."""
+        return np.asarray(data[key], dtype=float)
+
+    train_exp = values("train_exp")
+    test_exp = values("test_exp")
+    train_var = values("train_var")
+    test_var = values("test_var")
+    epochs = len(train_exp)
+    x = np.arange(epochs)
+
+    fig, ax = plt.subplots(nrows=2, sharex=True, figsize=(7, 6))
+    objective_name = data.get("objective_name", "variance")
+    ax[0].plot(x, train_exp, label="train", c="tab:blue")
+    ax[0].plot(x, test_exp, label="test", c="tab:red")
+    ax[0].axhline(data["target_exp"], c="k", label="undeformed")
+    if objective_name == "penalty":
+        ax[0].set_ylabel(r"$\langle e^{-2\,\mathrm{Re}\,\Delta S}\rangle$")
+        variance_label = r"$\mathrm{Var}(e^{-2\,\mathrm{Re}\,\Delta S})$"
+    else:
+        ax[0].set_ylabel(r"Re[Exp Q]")
+        variance_label = r"Var[Q]"
+
+    for lr_epoch in np.asarray(data.get("lr_change_epochs", []), dtype=int):
+        for axis in ax:
+            axis.axvspan(
+                lr_epoch - 0.5, lr_epoch + 0.5, color="0.5", alpha=0.25, zorder=0
+            )
+
+    if plot_error:
+        train_err = values("train_exp_err")
+        test_err = values("test_exp_err")
+        ax[0].fill_between(
+            x, train_exp - train_err, train_exp + train_err, color="tab:blue", alpha=0.3
+        )
+        ax[0].fill_between(
+            x, test_exp - test_err, test_exp + test_err, color="tab:red", alpha=0.3
+        )
+        target = data["target_exp"]
+        error = data["exp_err"]
+        ax[0].fill_between(x, target - error, target +
+                           error, color="k", alpha=0.1)
+
+    handles, labels = ax[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=3, framealpha=1.0)
+
+    ax[1].plot(x, train_var, label="train", c="tab:blue")
+    ax[1].plot(x, test_var, label="test", c="tab:red")
+    if data["initial_var"] > 0:
+        ax[1].axhline(data["initial_var"], c="k", label="undeformed")
+    ax[1].set_yscale("log")
+    ax[1].set_ylabel(variance_label)
+    ax[1].set_xlabel("Epoch")
+
+    fig.text(0.95, 0.2, plot_label, va="center", ha="left", rotation=270)
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0)
+    if fname is not None:
+        fig.savefig(fname, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig, ax
+
 
 def init_weights(m: nn.Module) -> None:
-        if isinstance(m, (nn.Linear,
-                          nn.Conv2d,
-                          nn.ConvTranspose2d)):
-            nn.init.normal_(m.weight, mean=0.0, std=WEIGHT_INIT_STD)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+    """Initialize supported affine layer weights near zero."""
+    if isinstance(
+        m,
+        (
+            nn.Linear,
+            nn.Conv1d,
+            nn.Conv2d,
+            nn.Conv3d,
+            nn.ConvTranspose1d,
+            nn.ConvTranspose2d,
+            nn.ConvTranspose3d,
+        ),
+    ):
+        nn.init.normal_(m.weight, mean=0.0, std=WEIGHT_INIT_STD)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
 
 class Trainer:
-    def __init__(self, model, loss_fn, optimizer,
-                 epochs, batch_size):
+    """Train deformation parameters against an observable loss."""
+
+    warmup_epochs = 50
+
+    def __init__(
+        self,
+        model: nn.Module,
+        loss_fn: nn.Module,
+        optimizer: optim.Optimizer,
+        epochs: int,
+        batch_size: int,
+    ) -> None:
+        """Initialize a trainer and its metric history."""
         self.model = model
         self.loss_fn = loss_fn
+        if getattr(loss_fn, "obs", None) is None:
+            raise ValueError("the loss must provide an observable with an input grid")
         self.grid = loss_fn.obs.grid
         self.optimizer = optimizer
         self.epochs = epochs
         self.batch_size = batch_size
 
-        self.train_var:        list[float] = []
-        self.train_exp:        list[float] = []
-        self.train_exp_err:    list[float] = []
-        self.test_var:         list[float] = []
-        self.test_exp:         list[float] = []
-        self.test_exp_err:     list[float] = []
-        self.alpha_record:     list = []
+        self.train_var: list[float] = []
+        self.train_exp: list[float] = []
+        self.train_exp_err: list[float] = []
+        self.test_var: list[float] = []
+        self.test_exp: list[float] = []
+        self.test_exp_err: list[float] = []
+        self.alpha_record: list[torch.Tensor] = []
+        self.lr_change_epochs: list[int] = []
 
-    def _init_figure(self):
+    def export_training_data(self) -> dict[str, Any]:
+        """Return the data needed to reproduce the training plot.
+
+        The returned values are detached NumPy arrays/scalars so that the
+        result can be passed directly to ``numpy.save`` (or serialized by a
+        caller) without retaining the computation graph.
+        """
+
+        def as_numpy(values: Sequence[float]) -> np.ndarray:
+            """Detach a numeric history and return it on the CPU."""
+            return torch.as_tensor(values).detach().cpu().numpy()
+
+        return dict(
+            train_exp=as_numpy(self.train_exp),
+            train_exp_err=as_numpy(self.train_exp_err),
+            test_exp=as_numpy(self.test_exp),
+            test_exp_err=as_numpy(self.test_exp_err),
+            train_var=as_numpy(self.train_var),
+            test_var=as_numpy(self.test_var),
+            target_exp=float(self.loss_fn.target_exp),
+            exp_err=float(self.loss_fn.exp_err),
+            initial_var=float(self.loss_fn.initial_var),
+            lr_change_epochs=torch.as_tensor(
+                self.lr_change_epochs, dtype=torch.int64)
+            .cpu()
+            .numpy(),
+            # Keep these available for selecting the best trained network.
+            alphas=[alpha.detach().cpu() for alpha in self.alpha_record],
+            objective_name=getattr(
+                self.loss_fn, "objective_name", type(self.loss_fn).__name__
+            ),
+            selection_metric=getattr(self.loss_fn, "selection_metric", "var"),
+        )
+
+    def _selection_history(self, sampletype: str) -> list[float]:
+        """Return the history matching the loss's checkpoint objective."""
+        metric = getattr(self.loss_fn, "selection_metric", "var")
+        if metric not in {"exp", "var"}:
+            raise ValueError(f"unsupported selection metric: {metric}")
+        return getattr(self, f"{sampletype}_{metric}")
+
+    def _initial_objective(self) -> float:
+        """Return the undeformed value of the optimized quantity."""
+        metric = getattr(self.loss_fn, "selection_metric", "var")
+        return float(
+            self.loss_fn.target_exp if metric == "exp" else self.loss_fn.initial_var
+        )
+
+    def _init_figure(self) -> tuple[Any, Any, dict[str, Any]]:
         """Set up the live-updating figure; return (fig, ax, artists)."""
         plt.ion()
         fig, ax = plt.subplots(
-            nrows=2, ncols=1, sharex=True,
+            nrows=2,
+            ncols=1,
+            sharex=True,
             gridspec_kw={"hspace": 0},
             figsize=(7, 6),
         )
@@ -73,20 +350,35 @@ class Trainer:
         ev_init_fill = ax[0].axhspan(0, 0, color="k", alpha=0.1)
 
         plt.show(block=False)
-        return fig, ax, dict(
-            ev=ev_line, ev_init=ev_init_line,
-            ev2=ev2_line,
-            var=var_line, var2=var2_line, var_init=var_init_line,
-            ev_fill=ev_fill, ev_init_fill=ev_init_fill,
-            ev2_fill=ev2_fill,
+        return (
+            fig,
+            ax,
+            dict(
+                ev=ev_line,
+                ev_init=ev_init_line,
+                ev2=ev2_line,
+                var=var_line,
+                var2=var2_line,
+                var_init=var_init_line,
+                ev_fill=ev_fill,
+                ev_init_fill=ev_init_fill,
+                ev2_fill=ev2_fill,
+            ),
         )
 
-    def _redraw(self, fig, ax, artists, epoch, moving_window=True):
+    def _redraw(
+        self,
+        fig: Any,
+        ax: Any,
+        artists: dict[str, Any],
+        epoch: int,
+        moving_window: bool = True,
+    ) -> None:
         """Update all plot artists for the current epoch."""
         if moving_window:
-            xdata = list(range(epoch-50, epoch + 1))
+            xdata = list(range(epoch - 50, epoch + 1))
         else:
-            xdata = list(range(50, epoch+1))
+            xdata = list(range(50, epoch + 1))
 
         exp_t = torch.tensor(self.train_exp)[xdata]
         std_t = torch.tensor(self.train_exp_err)[xdata]
@@ -95,7 +387,8 @@ class Trainer:
             xdata,
             (exp_t - std_t).numpy(),
             (exp_t + std_t).numpy(),
-            color="b", alpha=0.4,
+            color="b",
+            alpha=0.4,
         )
 
         exp_t2 = torch.tensor(self.test_exp)[xdata]
@@ -105,14 +398,16 @@ class Trainer:
             xdata,
             (exp_t2 - std_t2).numpy(),
             (exp_t2 + std_t2).numpy(),
-            color="r", alpha=0.4,
+            color="r",
+            alpha=0.4,
         )
 
         artists["ev_init_fill"].remove()
         artists["ev_init_fill"] = ax[0].axhspan(
             self.loss_fn.target_exp - self.loss_fn.exp_err,
             self.loss_fn.target_exp + self.loss_fn.exp_err,
-            color="k", alpha=0.1,
+            color="k",
+            alpha=0.1,
         )
 
         artists["ev"].set_data(xdata, torch.tensor(self.train_exp)[xdata])
@@ -131,20 +426,99 @@ class Trainer:
         fig.canvas.draw()
         fig.canvas.flush_events()
 
-    def train(self, alphanet, mask=None, plot=True, **kwargs):
-        fig, ax, artists = self._init_figure()
-        pbar = tqdm(range(self.epochs))
-        lr_reduced = False
+    def train(
+        self,
+        alphanet: nn.Module,
+        mask: torch.Tensor | None = None,
+        fixed_alphas: Mapping[tuple[int, ...], float] | None = None,
+        plot: bool = False,
+        max_training_time: float | None = None,
+        plateau_window: int = 20,
+        plateau_patience: int = 3,
+        plateau_min_delta: float = 1e-4,
+        extension: int = 100,
+        lr_factor: float = 0.5,
+        lr_patience: int = 20,
+        lr_cooldown: int = 10,
+        min_lr: float = 1e-6,
+        **kwargs: Any,
+    ) -> None:
+        """Train until a validation plateau or a wall-clock limit.
 
-        for epoch in range(self.epochs):
+        ``self.epochs`` is the initial/minimum epoch budget.  If
+        ``max_training_time`` is supplied, the budget is extended in blocks
+        of ``extension`` epochs while the rolling test variance is improving.
+        Training stops after ``plateau_patience`` non-improving rolling
+        windows, or when the time limit is reached.  The time limit is a
+        hard limit between epochs; an epoch already in progress is allowed
+        to finish.
+
+        ``fixed_alphas`` maps complete output-field indices to hard values.
+        Constraints are imposed after ``mask``, so they must refer to sites
+        retained by that mask if both options are used.
+        """
+        if max_training_time is not None and max_training_time <= 0:
+            raise ValueError("max_training_time must be positive")
+        if plateau_window < 1 or plateau_patience < 1:
+            raise ValueError(
+                "plateau_window and plateau_patience must be positive")
+        if extension < 1:
+            raise ValueError("extension must be positive")
+        if not 0 < lr_factor < 1:
+            raise ValueError("lr_factor must be between 0 and 1")
+        if lr_patience < 1 or lr_cooldown < 0 or min_lr < 0:
+            raise ValueError(
+                "lr_patience must be positive; lr_cooldown and min_lr non-negative"
+            )
+
+        initial_epochs = self.epochs
+        planned_epochs = initial_epochs
+        plateau_count = 0
+        best_rolling_objective = float("inf")
+        start_time = time.monotonic()
+        epoch_times = []
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode="min",
+            factor=lr_factor,
+            patience=lr_patience,
+            threshold=plateau_min_delta,
+            threshold_mode="abs",
+            cooldown=lr_cooldown,
+            min_lr=min_lr,
+        )
+
+        pbar = tqdm(total=planned_epochs)
+        if plot:
+            fig, ax, artists = self._init_figure()
+
+        epoch = 0
+        while epoch < planned_epochs:
+            epoch_start = time.monotonic()
+            if (
+                max_training_time is not None
+                and epoch > 0
+                and time.monotonic() - start_time >= max_training_time
+            ):
+                break
+
             self.optimizer.zero_grad()
             batch_idx = torch.randperm(
-                self.model.samples["train"].size(0)
+                self.model.samples["train"].size(0),
+                device=self.model.samples["train"].device,
             )[: self.batch_size]
             alphas = alphanet(self.grid)
             if mask is not None:
-                alphas = alphas*mask
-            self.alpha_record.append(alphas)
+                alphas = alphas * mask
+            if fixed_alphas:
+                alphas = alphas.clone()
+                for index, value in fixed_alphas.items():
+                    if len(index) != alphas.ndim:
+                        raise ValueError(
+                            "fixed alpha indices must address every output axis"
+                        )
+                    alphas[index] = value
+            self.alpha_record.append(alphas.detach().clone())
 
             loss = self.loss_fn(
                 alphas=alphas, batch_idx=batch_idx, sampletype="train")
@@ -152,20 +526,14 @@ class Trainer:
             self.optimizer.step()
 
             # Test metrics (only after warmup)
-            warmed_up = epoch > WARMUP_EPOCHS
+            warmed_up = epoch > self.warmup_epochs
             if warmed_up:
                 test_obs = self.loss_fn.get_obs(
                     alphas=alphas, sampletype="test")
                 self.test_exp.append(test_obs.mean().item())
                 self.test_var.append(test_obs.var(correction=0).item())
-                self.test_exp_err.append(bootstrap(test_obs).var().item()**0.5)
-
-                # Reduce lr if test_var < init_var
-                # lr_ratio = self.test_var[-1]/self.loss_fn.initial_var
-                # if (not lr_reduced) and (lr_ratio < 1.0):
-                #    for param_group in self.optimizer.param_groups:
-                #        param_group['lr'] = LEARNING_RATE/10
-                #        lr_reduced = True
+                self.test_exp_err.append(
+                    bootstrap(test_obs).var().item() ** 0.5)
 
             else:
                 self.test_exp.append(float("nan"))
@@ -174,145 +542,104 @@ class Trainer:
 
             # Train metrics
             train_obs = self.loss_fn.get_obs(
-                alphas=alphas,
-                batch_idx=batch_idx,
-                sampletype="train")
+                alphas=alphas, batch_idx=batch_idx, sampletype="train"
+            )
             self.train_exp.append(train_obs.mean().item())
             self.train_var.append(train_obs.var(correction=0).item())
-            self.train_exp_err.append(bootstrap(train_obs).var().item()**0.5)
+            self.train_exp_err.append(bootstrap(train_obs).var().item() ** 0.5)
 
             if warmed_up and plot:
                 self._redraw(fig, ax, artists, epoch, **kwargs)
 
-            current_loss = self.test_var[-1] if warmed_up else loss.item()
+            test_objective = self._selection_history("test")
+            current_loss = test_objective[-1] if warmed_up else loss.item()
             pbar.set_description(
-                f"loss: {current_loss:.4f} vs {self.loss_fn.initial_var:.4f}"
+                f"loss: {current_loss:.4f} vs {self._initial_objective():.4f}"
             )
             pbar.update(1)
+            epoch += 1
+            epoch_times.append(time.monotonic() - epoch_start)
+
+            # Compare rolling means rather than individual noisy test losses.
+            valid_test_objective = test_objective[-plateau_window:]
+            rolling_objective = None
+            if len(valid_test_objective) == plateau_window and all(
+                torch.isfinite(torch.tensor(valid_test_objective))
+            ):
+                rolling_objective = sum(valid_test_objective) / plateau_window
+                previous_lrs = [
+                    param_group["lr"] for param_group in self.optimizer.param_groups
+                ]
+                scheduler.step(rolling_objective)
+                if any(
+                    param_group["lr"] != previous_lr
+                    for param_group, previous_lr in zip(
+                        self.optimizer.param_groups, previous_lrs
+                    )
+                ):
+                    # The scheduler responds to the metric from the epoch
+                    # just completed, whose index is ``epoch - 1`` here.
+                    self.lr_change_epochs.append(epoch - 1)
+                if (
+                    rolling_objective
+                    < best_rolling_objective - plateau_min_delta
+                ):
+                    best_rolling_objective = rolling_objective
+                    plateau_count = 0
+                else:
+                    plateau_count += 1
+
+            if rolling_objective is not None:
+                pbar.set_postfix(
+                    lr=f"{self.optimizer.param_groups[0]['lr']:.2e}",
+                    rolling_objective=f"{rolling_objective:.4g}",
+                )
+
+            if epoch >= planned_epochs:
+                plateaued = plateau_count >= plateau_patience
+                if plateaued:
+                    break
+
+                if max_training_time is None:
+                    break
+
+                # Estimate the maximum number of epochs that fit in the
+                # remaining wall-clock budget.  The wall-clock check above
+                # remains authoritative if epoch times vary.
+                mean_epoch_time = sum(epoch_times) / len(epoch_times)
+                time_limited_epochs = max(
+                    epoch,
+                    int(max_training_time / mean_epoch_time),
+                )
+                if epoch >= time_limited_epochs:
+                    break
+
+                planned_epochs = min(
+                    planned_epochs + extension,
+                    time_limited_epochs,
+                )
+                pbar.total = planned_epochs
+                pbar.refresh()
 
         pbar.close()
+        self.epochs = len(self.train_var)
         plt.ioff()
         # plt.close("all")
 
-
-def load_samples(args):
-    """Load lattice gauge configurations and return a complex128 tensor."""
-    if args.source == "Raj":
-        lat_str = "x".join(str(n) for n in args.latsize)
-        configs = h5py.File(
-            f"data/CP{args.N}_lat{lat_str}_b{args.beta:.1f}.h5", "r"
-        )["configs"]
-        return CNtoR2N(torch.tensor(
-            configs["vectors"][2000::20], dtype=torch.complex128
-        ))
-
-    return CNtoR2N(
-        torch.from_file(
-            "data/cpn_b4.0_L64_Nc3_big_ens.dat",
-            shared=False,
-            size=2000 * 64 * 64 * 3,
-            dtype=torch.complex128,
+    def best_alphas(self, window: int = 20) -> torch.Tensor:
+        """Return fields from the best finite validation epoch in a final window."""
+        if not self.alpha_record:
+            raise RuntimeError("training has not recorded any alphas")
+        window = min(window, len(self.alpha_record))
+        test_values = torch.as_tensor(
+            self._selection_history("test")[-window:]
         )
-        .reshape(2000, 64, 64, 3)[50:]
-    )
-
-
-if __name__ == "__main__":
-    args, _ = parseargs()
-    N = args.N
-
-    samples = load_samples(args).to(torch.float32)
-    N_conf = len(samples)
-
-    # Action
-    my_action = actions.LatticeAction(args.beta, args.N, args.latsize)
-    volume = torch.tensor(args.latsize).prod().item()
-
-    print("\n".join([
-        "Ensemble details:",
-        f"  source : {args.source}",
-        f"  size   : {args.latsize}",
-        f"  beta   : {args.beta}",
-        f"  N_conf : {N_conf}",
-        f"  E/V    : {my_action.energy(samples).mean()/volume:.6f}",
-    ]))
-
-    # Train / test split
-    train_idx = torch.randperm(N_conf)[: int(args.split * N_conf)]
-    mask = torch.zeros(N_conf, dtype=torch.bool)
-    mask[train_idx] = True
-
-    # Observables and model
-    my_obs = observables.OnePtFn(
-        N=N, latsize=args.latsize,
-        i=args.i, j=args.j,
-        coord=(0, 0),
-        action=my_action,
-    )
-    alpha_mask = periodic_box_mask(
-        args.latsize, (0, 0), radius=6).unsqueeze(-1)
-    # my_obs = observables.TwoPtFn(
-    #    N=N, latsize=args.latsize,
-    #    i=args.i, j=args.j, delta=args.delta,
-    #    coord=(0, 0), action=my_action,
-    # )
-    model = HomogenousDeformations(N)
-    model.samples = {"all": samples,
-                     "train": samples[mask], "test": samples[~mask]}
-
-    loss_fn = VarianceLoss(model, samples, N, my_obs)
-    alphanet = UNet(
-        input_dim=loss_fn.obs.grid.shape[-1],
-        output_dim=model.DOF,
-    )
-    alphanet.apply(init_weights)
-
-    optimizer = optim.Adam(alphanet.parameters(), lr=LEARNING_RATE)
-    trainer = Trainer(model, loss_fn, optimizer, args.epochs, args.batch_size)
-
-    # Pre-training observable statistics
-    print(f"<O> = {loss_fn.target_exp:.6f},\tVar(O) = {
-          loss_fn.initial_var:.6f}")
-    ud_O = my_obs(model)
-    print(f"|<O>|^2 = {torch.abs(ud_O.mean()).item() ** 2:.6f}")
-    print(f"<|O|>^2 = {ud_O.abs().mean().item() ** 2:.6f}")
-    print(f"<|O|^2> = {(ud_O.abs() ** 2).mean().item():.6f}")
-
-    if not args.run:
-        raise SystemExit(0)
-
-    #trainer.train(alphanet, plot=False)
-    trainer.train(alphanet, alpha_mask, plot=False)
-
-    # Pick best checkpoint from the final window
-    window = trainer.test_var[-BEST_WINDOW:]
-    best_alphas = trainer.alpha_record[-BEST_WINDOW:][torch.argmin(
-        torch.tensor(window)).item()]
-
-    # analytic_loss_rat = (
-    #    trainer.loss_fn.var(alphas=loss_fn.obs.invSqAlphas, sampletype="all")
-    #    / loss_fn.initial_var
-    # )
-    best_training_loss_rat = (
-        trainer.loss_fn.var(alphas=best_alphas, sampletype="all")
-        / loss_fn.initial_var
-    )
-
-    if torch.isnan(best_training_loss_rat):
-        raise RuntimeError(
-            f"best_training_loss_rat is NaN for delta={args.delta}. "
-            "Ensure the test window falls entirely after the warmup period."
-        )
-
-    fname = f"data/training_params_OPF_i{
-        args.i}_j{args.j}_Nepochs{args.epochs}.pt"
-    # fname = f"data/training_params_TPF_i{args.i}_j{args.j}_delta_{
-    #    args.delta[0]}_{args.delta[1]}_Nepochs{args.epochs}.pt"
-
-    # torch.save(alphanet, fname)
-    # saved_data = torch.load(fname, weights_only=False)
-    # saved_data[0, *args.delta] = analytic_loss_rat.item()
-    # saved_data[1, *args.delta] = best_training_loss_rat.item()
-    # torch.save(saved_data, fname)
-    # print(f"Saved analytic and best training loss ratios to {
-    #      fname} for {args.delta}.")
+        finite = torch.isfinite(test_values)
+        if finite.any():
+            scores = torch.where(finite, test_values, torch.inf)
+        else:
+            scores = torch.as_tensor(
+                self._selection_history("train")[-window:]
+            )
+        best_index = int(torch.argmin(scores).item())
+        return self.alpha_record[-window:][best_index]

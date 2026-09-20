@@ -7,6 +7,8 @@ Created on Mon Aug 16 20:41:27 2021
 
 @author: jflynn
 """
+from __future__ import annotations
+
 from math import sqrt
 
 fig_width_pt = 455.24411  # Got this from LaTeX using \showthe\columnwidth

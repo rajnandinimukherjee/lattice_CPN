@@ -1,130 +1,109 @@
-import os
-import pdb
-import time
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 import torch
 
 
-def CNtoR2N(x, matrix=False):
+def CNtoR2N(x: torch.Tensor, matrix: bool = False) -> torch.Tensor:
+    """Convert a complex vector or matrix to its real representation."""
     if matrix:
-        assert x.shape[-1] == x.shape[-2], \
-            "input must be square matrix in last 2 dims"
-        new_vec = torch.zeros(
-            x.shape[:-2]+(2*x.shape[-2], 2*x.shape[-1]),
-            dtype=x.dtype)
-        new_vec[..., 0::2, 0::2] = x.real
-        new_vec[..., 0::2, 1::2] = -x.imag
-        new_vec[..., 1::2, 0::2] = x.imag
-        new_vec[..., 1::2, 1::2] = x.real
-    else:
-        new_vec = torch.zeros(
-            x.shape[:-1] + (2 * x.shape[-1],), dtype=torch.double)
-        new_vec[..., 0::2], new_vec[..., 1::2] = x.real, x.imag
-    return new_vec
+        if x.shape[-1] != x.shape[-2]:
+            raise ValueError("input must be square in its final two dimensions")
+        real_dtype = x.real.dtype
+        new_matrix = torch.zeros(
+            x.shape[:-2] + (2 * x.shape[-2], 2 * x.shape[-1]),
+            dtype=real_dtype,
+            device=x.device,
+        )
+        new_matrix[..., 0::2, 0::2] = x.real
+        new_matrix[..., 0::2, 1::2] = -x.imag
+        new_matrix[..., 1::2, 0::2] = x.imag
+        new_matrix[..., 1::2, 1::2] = x.real
+        return new_matrix
+
+    return torch.view_as_real(x).flatten(start_dim=-2)
 
 
-def R2NtoCN(X):
-    return X[..., 0::2] + 1j * X[..., 1::2]
+def R2NtoCN(x: torch.Tensor) -> torch.Tensor:
+    """Convert interleaved real and imaginary components to a complex tensor."""
+    if x.shape[-1] % 2:
+        raise ValueError("the final dimension must have even length")
+    return torch.complex(x[..., 0::2], x[..., 1::2])
 
 
-def randSN(N, size=()):
-    """ generates a random variable from S^N set
-        in form of a normalised R^{N+1} vector """
-
-    SN = torch.randn(size=size+(N+1,))
-    return SN/torch.linalg.norm(SN, dim=-1).unsqueeze(-1)
+def randSN(n: int, size: Sequence[int] = ()) -> torch.Tensor:
+    """Draw a uniformly distributed point on the unit sphere S^n."""
+    sample = torch.randn(size=tuple(size) + (n + 1,))
+    return sample / torch.linalg.vector_norm(sample, dim=-1, keepdim=True)
 
 
-def randCPN(N, size=()):
-    """ generates a random CP(N) vector """
-
-    return R2NtoCN(randSN(2*N+1, size=size))
-
-
-def oneCPN(N, size=()):
-    """ generates the CP(N) vector (1,0,...,0) """
-    base_vec = torch.zeros(N+1, dtype=torch.complex128)
-    base_vec[0] = 1.0
-    return base_vec.repeat(*size, 1)
+def randCPN(n: int, size: Sequence[int] = ()) -> torch.Tensor:
+    """Draw a random normalized representative of CP(n)."""
+    return R2NtoCN(randSN(2 * n + 1, size=size))
 
 
-def small_randSUN(N, size=(), eps=0.1):
-    # Random Hermitian matrix
-    X = torch.randn(size=size+(N, N,), dtype=torch.cdouble)
-    H = (X + X.conj().mT) / 2.0
-    # Make traceless
-    tr = H.diagonal(dim1=-2, dim2=-1).sum(-1).unsqueeze(-1).unsqueeze(-1)
-    I = torch.eye(N, dtype=H.dtype).expand(*size, -1, -1)
-    H_no_trace = H - (tr/N)*I
-    # Exponentiate: U = exp(i ε H)
-    U = torch.matrix_exp(1j * eps * H)
-    return U
+def oneCPN(n: int, size: Sequence[int] = ()) -> torch.Tensor:
+    """Return copies of the CP(n) representative ``(1, 0, ..., 0)``."""
+    base_vector = torch.zeros(n + 1, dtype=torch.complex128)
+    base_vector[0] = 1.0
+    return base_vector.repeat(*tuple(size), 1)
 
 
-def randSUN(N, size=(), dtype=torch.complex128):
-    """ generates random elements of the SU(N)
-    group in NxN matrix representation """
-
-    U = torch.randn(size=size+(N, N,)) +\
-        1j*torch.randn(size=size+(N, N,))
-    U = U.to(dtype)
-    q, r = torch.linalg.qr(U)
-
-    # 3) Fix phases so diag(r) has positive real entries
-    diag = torch.diagonal(r, dim1=-2, dim2=-1)
-    phases = diag / diag.abs()
-    eye = torch.eye(N).expand(*size, N, N).clone().to(dtype)
-    eye[..., torch.arange(N), torch.arange(N)] = phases.conj()
-    q = q @ eye
-
-    # 4) Project to SU(N): fix determinant
-    det_q = torch.linalg.det(q)
-    fix = torch.eye(N).expand(*size, N, N).clone().to(dtype)
-    fix[..., -1, -1] = det_q.conj()
-    q = q @ fix
-
-    return q
-
-    Q, R = torch.linalg.qr(U, mode='complete')
-
-    # enforce unitarity by making diag elements of R have norm 1
-    D = torch.exp(-1j*torch.angle(torch.einsum('...ii->...i', R))
-                  )[..., None, :]
-    U = Q*D
-
-    # make determinant 1
-    detU = torch.linalg.det(U)
-    U /= detU[..., None, None]**(1/N)
-    return U
+def small_randSUN(
+    n: int,
+    size: Sequence[int] = (),
+    eps: float = 0.1,
+) -> torch.Tensor:
+    """Draw SU(n) matrices close to the identity."""
+    batch_shape = tuple(size)
+    x = torch.randn(size=batch_shape + (n, n), dtype=torch.cdouble)
+    hermitian = (x + x.conj().mT) / 2.0
+    trace = hermitian.diagonal(dim1=-2, dim2=-1).sum(-1)[..., None, None]
+    identity = torch.eye(n, dtype=hermitian.dtype).expand(*batch_shape, -1, -1)
+    traceless = hermitian - (trace / n) * identity
+    return torch.matrix_exp(1j * eps * traceless)
 
 
-def Lambda(Y):
-    # return (1 + torch.linalg.norm(Y, axis=-1)**2)**0.5
-    return (1+torch.einsum('...i,...i->...', Y.conj(), Y))**0.5
+def randSUN(
+    n: int,
+    size: Sequence[int] = (),
+    dtype: torch.dtype = torch.complex128,
+) -> torch.Tensor:
+    """Draw Haar-distributed matrices in the fundamental representation of SU(n)."""
+    batch_shape = tuple(size)
+    matrix = torch.randn(size=batch_shape + (n, n))
+    matrix = (matrix + 1j * torch.randn_like(matrix)).to(dtype)
+    q, r = torch.linalg.qr(matrix)
+
+    diagonal = torch.diagonal(r, dim1=-2, dim2=-1)
+    phases = diagonal / diagonal.abs()
+    identity = torch.eye(n, dtype=dtype).expand(*batch_shape, n, n).clone()
+    indices = torch.arange(n)
+    identity[..., indices, indices] = phases.conj()
+    q = q @ identity
+
+    determinant = torch.linalg.det(q)
+    determinant_fix = torch.eye(n, dtype=dtype).expand(*batch_shape, n, n).clone()
+    determinant_fix[..., -1, -1] = determinant.conj()
+    return q @ determinant_fix
 
 
-def call_PDF(filename, show=True):
-    """ plots matplotlib graphics to pdfs, saves and opens file"""
-
-    pdf = PdfPages(filename)
-    fig_nums = plt.get_fignums()
-    figs = [plt.figure(n) for n in fig_nums]
-    for fig in figs:
-        fig.savefig(pdf, format="pdf")
-    pdf.close()
-    plt.close("all")
-    if show:
-        os.system("open " + filename)
+def Lambda(y: torch.Tensor) -> torch.Tensor:
+    """Return the normalization factor for a homogeneous deformation."""
+    return (1 + torch.einsum("...i,...i->...", y.conj(), y)) ** 0.5
 
 
-def compCat(x):
-    """ concatenates real and imaginary parts 
-    of a complex tensor along the last dimension """
-    if x.dtype != torch.cdouble:
+def compCat(x: torch.Tensor) -> torch.Tensor:
+    """Concatenate the real and imaginary parts along the final dimension."""
+    if not x.is_complex():
         x = x.to(torch.cdouble)
     return torch.cat([x.real, x.imag], dim=-1)
 
 
-def compUncat(x):
-    assert x.shape[-1] % 2 == 0, "last dimension size must be even"
-    dim = int(x.shape[-1]/2)
-    return x[..., :dim]+1j*x[..., dim:]
+def compUncat(x: torch.Tensor) -> torch.Tensor:
+    """Undo :func:`compCat` and return a complex tensor."""
+    if x.shape[-1] % 2:
+        raise ValueError("the final dimension must have even length")
+    midpoint = x.shape[-1] // 2
+    return torch.complex(x[..., :midpoint], x[..., midpoint:])

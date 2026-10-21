@@ -7,18 +7,38 @@ from typing import Any
 import matplotlib.pyplot as plt
 import torch
 
+from CPN_utils import ComplexPair
+
 
 def cpn_one_pt_fn(
-    Z: torch.Tensor,
+    Z: torch.Tensor | ComplexPair,
     i: int,
     j: int,
     coord: Sequence[int],
-) -> torch.Tensor:
-    """Evaluate ``z_i z_j^*`` at one lattice coordinate."""
-    Z_pt = Z[..., *coord, :].movedim(-1, 0)
-    Z_i = Z_pt[2 * i] + 1j * Z_pt[2 * i + 1]
-    Z_j_bar = Z_pt[2 * j] - 1j * Z_pt[2 * j + 1]
-    return Z_i * Z_j_bar
+) -> torch.Tensor | ComplexPair:
+    """Evaluate ``z_i z_j^*`` without materializing an MPS complex tensor."""
+    if isinstance(Z, ComplexPair):
+        real = Z.real[..., *coord, :]
+        imag = Z.imag[..., *coord, :]
+        Z_i = ComplexPair(
+            real[..., 2 * i] - imag[..., 2 * i + 1],
+            imag[..., 2 * i] + real[..., 2 * i + 1],
+        )
+        Z_j_bar = ComplexPair(
+            real[..., 2 * j] + imag[..., 2 * j + 1],
+            imag[..., 2 * j] - real[..., 2 * j + 1],
+        )
+        return Z_i * Z_j_bar
+    if Z.is_complex():
+        Z_pt = Z[..., *coord, :].movedim(-1, 0)
+        Z_i = Z_pt[2 * i] + 1j * Z_pt[2 * i + 1]
+        Z_j_bar = Z_pt[2 * j] - 1j * Z_pt[2 * j + 1]
+        return Z_i * Z_j_bar
+
+    Z_pt = Z[..., *coord, :]
+    return ComplexPair(
+        Z_pt[..., 2 * i], Z_pt[..., 2 * i + 1]
+    ) * ComplexPair(Z_pt[..., 2 * j], -Z_pt[..., 2 * j + 1])
 
 
 class CPnOnePtFn:
@@ -36,6 +56,7 @@ class CPnOnePtFn:
     ) -> None:
         """Initialize a one-point observable and network input grid."""
         assert i <= N and j <= N, f"i, j need to be <={N}"
+        self.N = N
         self.i = i
         self.j = j
         self.latsize = tuple(latsize)
@@ -55,7 +76,7 @@ class CPnOnePtFn:
         Op = r"z_" + str(self.i) + r"z^\dagger_" + str(self.j)
         return r"$" + Op + str(self.source) + r"$"
 
-    def observable(self, Z: torch.Tensor) -> torch.Tensor:
+    def observable(self, Z: torch.Tensor | ComplexPair) -> torch.Tensor | ComplexPair:
         """Evaluate and center the bare one-point observable."""
         obs = cpn_one_pt_fn(Z, self.i, self.j, self.source)
         return obs - obs.mean()
@@ -70,7 +91,7 @@ class CPnOnePtFn:
         return_fields: bool = False,
         return_jac: bool = False,
         **kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | ComplexPair:
         """Evaluate the observable, optionally including contour weights."""
 
         X = model.samples[sampletype]
@@ -78,11 +99,21 @@ class CPnOnePtFn:
             X = X[batch_idx]
 
         if deform:
-            Z = model.complexify(X, alphas)
+            Z = model.deform(X, alphas)
             if return_fields:
                 return Z
 
-            Sdiff = torch.exp(-self.action(Z) + self.action(X))
+            action_input = getattr(model, "action_input", None)
+            if action_input is None:
+                action_input = lambda fields, **_: fields
+            Sdiff = (
+                -self.action(
+                    action_input(Z, sampletype=sampletype, batch_idx=batch_idx)
+                )
+                + self.action(
+                    action_input(X, sampletype=sampletype, batch_idx=batch_idx)
+                )
+            ).exp()
             detJ = model.detJac(X, alphas)
             if return_jac:
                 return detJ
@@ -111,6 +142,7 @@ class CPnTwoPtFn:
     ) -> None:
         """Initialize source, sink, and deformation seed fields."""
         assert i <= N and j <= N, f"i, j need to be <={N}"
+        self.N = N
         self.i = i
         self.j = j
         self.latsize = tuple(latsize)
@@ -152,12 +184,15 @@ class CPnTwoPtFn:
             + r"$"
         )
 
-    def observable(self, Z: torch.Tensor) -> torch.Tensor:
-        """Evaluate and center the bare two-point observable."""
+    def observable(self, Z: torch.Tensor | ComplexPair) -> torch.Tensor | ComplexPair:
+        """Evaluate ``P_ij(source) P_ji(sink)`` without sample centering."""
         opf1 = cpn_one_pt_fn(Z, self.i, self.j, self.source)
         opf2_dag = cpn_one_pt_fn(Z, self.j, self.i, self.sink)
-        obs = opf1 * opf2_dag
-        return obs - obs.mean()
+        if self.i == self.j:
+            identity_piece = 1.0 / (self.N + 1)
+            opf1 = opf1 - identity_piece
+            opf2_dag = opf2_dag - identity_piece
+        return opf1 * opf2_dag
 
     def __call__(
         self,
@@ -169,7 +204,7 @@ class CPnTwoPtFn:
         return_fields: bool = False,
         return_jac: bool = False,
         **kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | ComplexPair:
         """Evaluate the observable, optionally including contour weights."""
 
         X = model.samples[sampletype]
@@ -178,11 +213,21 @@ class CPnTwoPtFn:
 
         if deform:
 
-            Z = model.complexify(X, alphas)
+            Z = model.deform(X, alphas)
             if return_fields:
                 return Z
 
-            Sdiff = torch.exp(-self.action(Z) + self.action(X))
+            action_input = getattr(model, "action_input", None)
+            if action_input is None:
+                action_input = lambda fields, **_: fields
+            Sdiff = (
+                -self.action(
+                    action_input(Z, sampletype=sampletype, batch_idx=batch_idx)
+                )
+                + self.action(
+                    action_input(X, sampletype=sampletype, batch_idx=batch_idx)
+                )
+            ).exp()
             detJ = model.detJac(X, alphas)
             if return_jac:
                 return detJ

@@ -5,7 +5,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from CPN_utils import CNtoR2N
+from CPN_utils import CNtoR2N, ComplexPair
 from training import bootstrap
 
 
@@ -75,6 +75,79 @@ class VarianceLoss(nn.Module):
         return bootstrapped.mean().item(), bootstrapped.var().item() ** 0.5
 
 
+class ComplexVarianceLoss(nn.Module):
+    """Second-moment loss for a complex estimator with invariant mean.
+
+    The contour change leaves the exact expectation value fixed, so minimizing
+    ``E[|Q - c|^2]`` for a fixed estimate ``c`` of that expectation minimizes
+    the complex variance.  ``get_obs`` returns per-configuration contributions
+    to that second moment, which lets the shared ``Trainer`` record and select
+    checkpoints without discarding the imaginary component of ``Q``.
+    """
+
+    objective_name = "variance"
+    # The Trainer's ``exp`` history is the mean of the per-configuration
+    # second-moment contributions returned by ``get_obs``.
+    selection_metric = "exp"
+
+    def __init__(self, model: nn.Module, obs: Any) -> None:
+        super().__init__()
+        self.model = model
+        self.obs = obs
+        self.init = self._get_complex_obs(deform=False, sampletype="all")
+        train_init = self._get_complex_obs(deform=False, sampletype="train")
+        # Estimate the centering constant on the training split.  Its finite
+        # sample error adds a deformation-independent term to held-out scores.
+        self.target_mean = self._mean(train_init)
+        self.initial_var = self._variance(self.init)
+        init_contributions = self._contributions(self.init)
+        self.target_exp = float(init_contributions.mean().item())
+        self.exp_err = bootstrap(init_contributions).var().item() ** 0.5
+
+    @staticmethod
+    def _mean(values: Any) -> Any:
+        return values.mean()
+
+    @staticmethod
+    def _modulus_squared(values: Any) -> torch.Tensor:
+        if isinstance(values, ComplexPair):
+            return values.real.square() + values.imag.square()
+        return values.abs().square()
+
+    @classmethod
+    def _variance(cls, values: Any) -> float:
+        centered = values - cls._mean(values)
+        return float(cls._modulus_squared(centered).mean().item())
+
+    def _get_complex_obs(self, **kwargs: Any) -> Any:
+        return self.obs(model=self.model, **kwargs)
+
+    def _contributions(self, values: Any) -> torch.Tensor:
+        return self._modulus_squared(values - self.target_mean)
+
+    def get_obs(
+        self,
+        alphas: torch.Tensor | None = None,
+        batch_idx: torch.Tensor | slice = slice(None),
+        deform: bool = True,
+        sampletype: str = "train",
+    ) -> torch.Tensor:
+        values = self._get_complex_obs(
+            alphas=alphas,
+            batch_idx=batch_idx,
+            deform=deform,
+            sampletype=sampletype,
+        )
+        return self._contributions(values)
+
+    def forward(self, alphas: torch.Tensor | None = None, **kwargs: Any) -> torch.Tensor:
+        return self.get_obs(alphas=alphas, **kwargs).mean()
+
+    def get_stats(self, **kwargs: Any) -> tuple[float, float]:
+        bootstrapped = bootstrap(self.get_obs(**kwargs))
+        return bootstrapped.mean().item(), bootstrapped.var().item() ** 0.5
+
+
 class PenaltyLoss(nn.Module):
     """Penalty objective for a model-deformed observable."""
 
@@ -107,10 +180,26 @@ class PenaltyLoss(nn.Module):
         if sampletype == "train":
             X = X[batch_idx]
 
-        S_undef = self.action(X)
+        def action_input(fields: torch.Tensor) -> Any:
+            """Adapt vector fields to the action used by the model."""
+            make_input = getattr(self.model, "action_input", None)
+            if make_input is None:
+                return fields
+            return make_input(
+                fields, sampletype=sampletype, batch_idx=batch_idx
+            )
+
+        S_undef = self.action(action_input(X))
         if deform:
-            X = self.model.complexify(X, alphas[..., 0])
-        S_def = self.action(X)
+            if alphas is None:
+                raise ValueError("alphas are required for a deformed penalty")
+            # ThetaDefs takes a scalar field, whereas homogeneous CP(N)
+            # deformations take their full component-valued alpha field.
+            deformation_alphas = (
+                alphas[..., 0] if alphas.shape[-1] == 1 else alphas
+            )
+            X = self.model.complexify(X, deformation_alphas)
+        S_def = self.action(action_input(X))
         Re_S_diff = (S_def - S_undef).real
         return torch.exp(-2*Re_S_diff)
 

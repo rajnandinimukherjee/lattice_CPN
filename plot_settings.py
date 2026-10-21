@@ -20,8 +20,16 @@ fig_size = [fig_width, fig_height]
 plotparams = {
     "backend": "ps",
     "font.size": 10,
-    "font.family": "STIXGeneral",
-    "mathtext.fontset": "stix",
+    # Match LaTeX's default Computer Modern Roman typeface for ordinary text
+    # and Matplotlib's built-in Computer Modern math renderer.  This does not
+    # require a LaTeX installation at plot time.
+    "font.family": "serif",
+    "font.serif": ["cmr10"],
+    "mathtext.fontset": "cm",
+    "axes.formatter.use_mathtext": True,
+    # Classic Computer Modern text fonts lack the Unicode minus sign used by
+    # Matplotlib tick labels. Use the supported ASCII hyphen instead.
+    "axes.unicode_minus": False,
     "xtick.labelsize": 10,
     "ytick.labelsize": 10,
     "axes.labelsize": 10,
@@ -31,4 +39,15 @@ plotparams = {
     "legend.frameon": True,
     "legend.handletextpad": 0.3,
     "legend.labelspacing": 0.25,
+}
+
+# Plot modules may apply this subset after importing pyplot.  In particular,
+# do not include ``backend`` here: backend selection must happen before pyplot
+# is imported and is unrelated to the plot typography.
+latex_font_params = {
+    "font.family": plotparams["font.family"],
+    "font.serif": plotparams["font.serif"],
+    "mathtext.fontset": plotparams["mathtext.fontset"],
+    "axes.formatter.use_mathtext": plotparams["axes.formatter.use_mathtext"],
+    "axes.unicode_minus": plotparams["axes.unicode_minus"],
 }

@@ -1,8 +1,148 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
+
+
+@dataclass(frozen=True)
+class ComplexPair:
+    """A complex value represented by two real tensors.
+
+    CP(N) samples are stored as interleaved real coordinates.  A contour
+    deformation makes each of those coordinates complex, which cannot be
+    materialized on PyTorch's MPS backend.  ``ComplexPair`` keeps the outer
+    complex value as separate real and imaginary tensors, so its arithmetic
+    stays on any backend that supports the underlying real dtype.
+
+    This is deliberately a small value type rather than a replacement for
+    ``torch.Tensor``.  Use :meth:`to_complex` only at an output boundary
+    (typically after moving the pair to CPU) when a native complex tensor is
+    required for display or serialization.
+    """
+
+    real: torch.Tensor
+    imag: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.real.shape != self.imag.shape:
+            raise ValueError("real and imaginary tensors must have the same shape")
+        if self.real.device != self.imag.device:
+            raise ValueError("real and imaginary tensors must be on the same device")
+        if self.real.dtype != self.imag.dtype:
+            raise ValueError("real and imaginary tensors must have the same dtype")
+        if self.real.is_complex() or self.imag.is_complex():
+            raise ValueError("ComplexPair stores real tensors only")
+
+    @property
+    def shape(self) -> torch.Size:
+        """Expose the tensor shape used by field/action interfaces."""
+        return self.real.shape
+
+    def __len__(self) -> int:
+        """Return the leading dimension like the wrapped field tensor."""
+        return len(self.real)
+
+    @property
+    def ndim(self) -> int:
+        """Expose the tensor rank used by lattice helpers."""
+        return self.real.ndim
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Return the real component dtype."""
+        return self.real.dtype
+
+    @property
+    def device(self) -> torch.device:
+        """Return the common component device."""
+        return self.real.device
+
+    def __getitem__(self, item: object) -> ComplexPair:
+        return ComplexPair(self.real[item], self.imag[item])
+
+    def __add__(self, other: ComplexPair | torch.Tensor | float) -> ComplexPair:
+        if isinstance(other, ComplexPair):
+            return ComplexPair(self.real + other.real, self.imag + other.imag)
+        return ComplexPair(self.real + other, self.imag)
+
+    def __radd__(self, other: torch.Tensor | float) -> ComplexPair:
+        return self + other
+
+    def __sub__(self, other: ComplexPair | torch.Tensor | float) -> ComplexPair:
+        if isinstance(other, ComplexPair):
+            return ComplexPair(self.real - other.real, self.imag - other.imag)
+        return ComplexPair(self.real - other, self.imag)
+
+    def __rsub__(self, other: torch.Tensor | float) -> ComplexPair:
+        return ComplexPair(other - self.real, -self.imag)
+
+    def __mul__(self, other: ComplexPair | torch.Tensor | float) -> ComplexPair:
+        if isinstance(other, ComplexPair):
+            return ComplexPair(
+                self.real * other.real - self.imag * other.imag,
+                self.real * other.imag + self.imag * other.real,
+            )
+        return ComplexPair(self.real * other, self.imag * other)
+
+    def __rmul__(self, other: torch.Tensor | float) -> ComplexPair:
+        return self * other
+
+    def __neg__(self) -> ComplexPair:
+        return ComplexPair(-self.real, -self.imag)
+
+    def mean(self, *args: object, **kwargs: object) -> ComplexPair:
+        """Return the component-wise tensor mean."""
+        return ComplexPair(self.real.mean(*args, **kwargs), self.imag.mean(*args, **kwargs))
+
+    def sum(self, *args: object, **kwargs: object) -> ComplexPair:
+        """Return the component-wise tensor sum."""
+        return ComplexPair(self.real.sum(*args, **kwargs), self.imag.sum(*args, **kwargs))
+
+    def exp(self) -> ComplexPair:
+        """Return the complex exponential without a complex tensor."""
+        magnitude = torch.exp(self.real)
+        return ComplexPair(magnitude * torch.cos(self.imag), magnitude * torch.sin(self.imag))
+
+    def roll(self, shifts: int | tuple[int, ...], dims: int | tuple[int, ...]) -> ComplexPair:
+        """Roll both components as one lattice field."""
+        return ComplexPair(
+            torch.roll(self.real, shifts, dims),
+            torch.roll(self.imag, shifts, dims),
+        )
+
+    def matmul(self, other: torch.Tensor) -> ComplexPair:
+        """Right-multiply both components by a real matrix."""
+        if other.is_complex():
+            raise ValueError("ComplexPair.matmul requires a real matrix")
+        return ComplexPair(self.real @ other, self.imag @ other)
+
+    def to(self, *args: object, **kwargs: object) -> ComplexPair:
+        """Move or cast both real components together."""
+        return ComplexPair(self.real.to(*args, **kwargs), self.imag.to(*args, **kwargs))
+
+    def cpu(self) -> ComplexPair:
+        """Move both components to CPU for native complex output if needed."""
+        return self.to("cpu")
+
+    def to_complex(self) -> torch.Tensor:
+        """Materialize a native complex tensor at an explicit output boundary."""
+        return torch.complex(self.real, self.imag)
+
+
+def complex_inner(
+    left: torch.Tensor | ComplexPair,
+    right: torch.Tensor | ComplexPair,
+) -> torch.Tensor | ComplexPair:
+    """Return the bilinear final-axis inner product in real-pair arithmetic."""
+    if not isinstance(left, ComplexPair) and not isinstance(right, ComplexPair):
+        return (left * right).sum(dim=-1)
+    if not isinstance(left, ComplexPair):
+        left = ComplexPair(left, torch.zeros_like(left))
+    if not isinstance(right, ComplexPair):
+        right = ComplexPair(right, torch.zeros_like(right))
+    return (left * right).sum(dim=-1)
 
 
 def CNtoR2N(x: torch.Tensor, matrix: bool = False) -> torch.Tensor:

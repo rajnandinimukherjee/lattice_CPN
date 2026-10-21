@@ -132,6 +132,7 @@ def load_ensemble(
     filename: str | PathLike[str],
     *,
     decorrelation_factor: float = 1.0,
+    diagnostics: dict[str, object] | None = None,
 ) -> tuple[torch.Tensor, float]:
     """Load and thin an XY ensemble using its slowest standard diagnostic.
 
@@ -162,14 +163,14 @@ def load_ensemble(
             "energies and configurations have different chain counts")
 
     magnetization_real, magnetization_imag = _xy_magnetization(x)
-    diagnostics = {
+    diagnostic_series = {
         "energy": energies,
         "Re(magnetization)": magnetization_real,
         "Im(magnetization)": magnetization_imag,
         "|magnetization|": torch.hypot(magnetization_real, magnetization_imag),
     }
     autocorrelation_times: dict[str, float] = {}
-    for name, values in diagnostics.items():
+    for name, values in diagnostic_series.items():
         _, acf = autocorrelation(values)
         try:
             autocorrelation_times[name] = integrated_autocorrelation_time(acf)
@@ -191,6 +192,18 @@ def load_ensemble(
     step = max(1, int(np.ceil(decorrelation_factor * statistical_inefficiency)))
     n_steps = x.shape[1]
     effective_sample_size = x.shape[0] * n_steps / statistical_inefficiency
+    if diagnostics is not None:
+        diagnostics.update(
+            tau_int=float(tau_int),
+            statistical_inefficiency=float(statistical_inefficiency),
+            effective_sample_size=float(effective_sample_size),
+            stride=int(step),
+            limiting_diagnostic=limiting_diagnostic,
+            raw_configuration_count=int(x.shape[0] * x.shape[1]),
+            retained_configuration_count=int(
+                x.shape[0] * ((n_steps + step - 1) // step)
+            ),
+        )
     if n_steps < 50 * statistical_inefficiency:
         warnings.warn(
             "The chain is shorter than 50 autocorrelation times; the thinning "

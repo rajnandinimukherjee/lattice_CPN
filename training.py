@@ -12,6 +12,11 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 
+from plot_settings import latex_font_params
+
+
+plt.rcParams.update(latex_font_params)
+
 WEIGHT_INIT_STD = 1e-3
 
 
@@ -274,6 +279,12 @@ class Trainer:
         self.test_exp_err: list[float] = []
         self.alpha_record: list[torch.Tensor] = []
         self.lr_change_epochs: list[int] = []
+        self.lr_history: list[float] = []
+        self.monitor_epochs: list[int] = []
+        self.monitor_objective: list[float] = []
+        self.stop_reason = "not_started"
+        self.best_epoch: int | None = None
+        self.training_config: dict[str, Any] = {}
 
     def export_training_data(self) -> dict[str, Any]:
         """Return the data needed to reproduce the training plot.
@@ -301,6 +312,16 @@ class Trainer:
                 self.lr_change_epochs, dtype=torch.int64)
             .cpu()
             .numpy(),
+            lr_history=as_numpy(self.lr_history),
+            monitor_epochs=torch.as_tensor(
+                self.monitor_epochs, dtype=torch.int64
+            )
+            .cpu()
+            .numpy(),
+            monitor_objective=as_numpy(self.monitor_objective),
+            stop_reason=self.stop_reason,
+            best_epoch=self.best_epoch,
+            training_config=dict(self.training_config),
             # Keep these available for selecting the best trained network.
             alphas=[alpha.detach().cpu() for alpha in self.alpha_record],
             objective_name=getattr(
@@ -436,22 +457,30 @@ class Trainer:
         plateau_window: int = 20,
         plateau_patience: int = 3,
         plateau_min_delta: float = 1e-4,
+        plateau_threshold_mode: str = "rel",
+        early_stopping: bool = False,
         extension: int = 100,
+        lr_scheduler: str = "plateau",
         lr_factor: float = 0.5,
-        lr_patience: int = 20,
-        lr_cooldown: int = 10,
-        min_lr: float = 1e-6,
+        lr_patience: int = 5,
+        lr_cooldown: int = 1,
+        min_lr: float = 1e-5,
+        validation_interval: int = 1,
+        validation_samples: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Train until a validation plateau or a wall-clock limit.
+        """Train until the configured stopping condition is reached.
 
-        ``self.epochs`` is the initial/minimum epoch budget.  If
-        ``max_training_time`` is supplied, the budget is extended in blocks
-        of ``extension`` epochs while the rolling test variance is improving.
-        Training stops after ``plateau_patience`` non-improving rolling
-        windows, or when the time limit is reached.  The time limit is a
-        hard limit between epochs; an epoch already in progress is allowed
-        to finish.
+        Validation runs every ``validation_interval`` optimizer steps and can
+        use a fixed random subset of the held-out split. Validation objectives
+        are averaged over non-overlapping blocks of ``plateau_window`` such
+        observations. Scheduler and early-stopping patience therefore count
+        independent monitoring blocks rather than highly correlated sliding
+        windows. If ``max_training_time`` is
+        supplied, the initial epoch budget may be extended in blocks of
+        ``extension`` while validation continues to improve. The time limit
+        is enforced between epochs; an epoch already in progress finishes.
+        Validation plateaus stop the run only when ``early_stopping`` is true.
 
         ``fixed_alphas`` maps complete output-field indices to hard values.
         Constraints are imposed after ``mask``, so they must refer to sites
@@ -462,31 +491,105 @@ class Trainer:
         if plateau_window < 1 or plateau_patience < 1:
             raise ValueError(
                 "plateau_window and plateau_patience must be positive")
+        if plateau_min_delta < 0:
+            raise ValueError("plateau_min_delta must be non-negative")
+        if plateau_threshold_mode not in {"abs", "rel"}:
+            raise ValueError(
+                "plateau_threshold_mode must be 'abs' or 'rel'")
+        if plateau_threshold_mode == "rel" and plateau_min_delta >= 1:
+            raise ValueError(
+                "relative plateau_min_delta must be smaller than 1")
         if extension < 1:
             raise ValueError("extension must be positive")
+        if lr_scheduler not in {"constant", "cosine", "plateau"}:
+            raise ValueError(
+                "lr_scheduler must be 'constant', 'cosine', or 'plateau'")
         if not 0 < lr_factor < 1:
             raise ValueError("lr_factor must be between 0 and 1")
         if lr_patience < 1 or lr_cooldown < 0 or min_lr < 0:
             raise ValueError(
                 "lr_patience must be positive; lr_cooldown and min_lr non-negative"
             )
+        if validation_interval < 1:
+            raise ValueError("validation_interval must be positive")
+        if validation_samples is not None and validation_samples < 2:
+            raise ValueError("validation_samples must be at least 2")
+        initial_lrs = [
+            float(group["lr"]) for group in self.optimizer.param_groups
+        ]
+        if lr_scheduler != "constant" and min_lr > min(initial_lrs):
+            raise ValueError("min_lr cannot exceed the initial learning rate")
 
         initial_epochs = self.epochs
         planned_epochs = initial_epochs
         plateau_count = 0
         best_rolling_objective = float("inf")
+        validation_block: list[float] = []
         start_time = time.monotonic()
         epoch_times = []
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode="min",
-            factor=lr_factor,
-            patience=lr_patience,
-            threshold=plateau_min_delta,
-            threshold_mode="abs",
-            cooldown=lr_cooldown,
-            min_lr=min_lr,
+        plateau_scheduler = None
+        cosine_scheduler = None
+        if lr_scheduler == "plateau":
+            plateau_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=lr_factor,
+                patience=lr_patience,
+                threshold=plateau_min_delta,
+                threshold_mode=plateau_threshold_mode,
+                cooldown=lr_cooldown,
+                min_lr=min_lr,
+            )
+        elif lr_scheduler == "cosine":
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=max(initial_epochs, 1),
+                eta_min=min_lr,
+            )
+
+        self.stop_reason = "running"
+        self.training_config = {
+            "batch_size": int(self.batch_size),
+            "n_train": int(self.model.samples["train"].size(0)),
+            "n_test": int(self.model.samples["test"].size(0)),
+            "initial_learning_rates": initial_lrs,
+            "lr_scheduler": lr_scheduler,
+            "lr_factor": float(lr_factor),
+            "lr_patience": int(lr_patience),
+            "lr_cooldown": int(lr_cooldown),
+            "min_lr": float(min_lr),
+            "plateau_window": int(plateau_window),
+            "plateau_patience": int(plateau_patience),
+            "plateau_min_delta": float(plateau_min_delta),
+            "plateau_threshold_mode": plateau_threshold_mode,
+            "early_stopping": bool(early_stopping),
+            "validation_interval": int(validation_interval),
+            "validation_samples": (
+                None if validation_samples is None else int(validation_samples)
+            ),
+        }
+
+        full_test_fields = self.model.samples["test"]
+        validation_fields = full_test_fields
+        link_samples = getattr(self.model, "link_samples", None)
+        full_test_links = (
+            link_samples.get("test") if link_samples is not None else None
         )
+        validation_links = full_test_links
+        if (
+            validation_samples is not None
+            and validation_samples < len(full_test_fields)
+        ):
+            validation_indices = torch.randperm(
+                len(full_test_fields), device=full_test_fields.device
+            )[:validation_samples]
+            validation_fields = full_test_fields.index_select(
+                0, validation_indices
+            )
+            if full_test_links is not None:
+                validation_links = full_test_links.index_select(
+                    0, validation_indices
+                )
 
         pbar = tqdm(total=planned_epochs)
         if plot:
@@ -500,8 +603,12 @@ class Trainer:
                 and epoch > 0
                 and time.monotonic() - start_time >= max_training_time
             ):
+                self.stop_reason = "time_limit"
                 break
 
+            self.lr_history.append(
+                float(self.optimizer.param_groups[0]["lr"])
+            )
             self.optimizer.zero_grad()
             batch_idx = torch.randperm(
                 self.model.samples["train"].size(0),
@@ -525,11 +632,23 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
 
-            # Test metrics (only after warmup)
+            # Evaluate the held-out objective at the requested cadence.
             warmed_up = epoch > self.warmup_epochs
-            if warmed_up:
-                test_obs = self.loss_fn.get_obs(
-                    alphas=alphas, sampletype="test")
+            validation_due = warmed_up and (
+                (epoch - self.warmup_epochs) % validation_interval == 0
+            )
+            if validation_due:
+                self.model.samples["test"] = validation_fields
+                if link_samples is not None and validation_links is not None:
+                    link_samples["test"] = validation_links
+                try:
+                    test_obs = self.loss_fn.get_obs(
+                        alphas=alphas, sampletype="test"
+                    )
+                finally:
+                    self.model.samples["test"] = full_test_fields
+                    if link_samples is not None and full_test_links is not None:
+                        link_samples["test"] = full_test_links
                 self.test_exp.append(test_obs.mean().item())
                 self.test_var.append(test_obs.var(correction=0).item())
                 self.test_exp_err.append(
@@ -548,11 +667,15 @@ class Trainer:
             self.train_var.append(train_obs.var(correction=0).item())
             self.train_exp_err.append(bootstrap(train_obs).var().item() ** 0.5)
 
-            if warmed_up and plot:
+            if validation_due and plot:
                 self._redraw(fig, ax, artists, epoch, **kwargs)
 
             test_objective = self._selection_history("test")
-            current_loss = test_objective[-1] if warmed_up else loss.item()
+            current_loss = (
+                test_objective[-1]
+                if test_objective and np.isfinite(test_objective[-1])
+                else loss.item()
+            )
             pbar.set_description(
                 f"loss: {current_loss:.4f} vs {self._initial_objective():.4f}"
             )
@@ -560,18 +683,26 @@ class Trainer:
             epoch += 1
             epoch_times.append(time.monotonic() - epoch_start)
 
-            # Compare rolling means rather than individual noisy test losses.
-            valid_test_objective = test_objective[-plateau_window:]
+            if cosine_scheduler is not None and epoch <= initial_epochs:
+                cosine_scheduler.step()
+
+            # Average disjoint validation blocks. Feeding overlapping rolling
+            # means to a patience counter makes it reduce the learning rate on
+            # many almost-identical observations.
             rolling_objective = None
-            if len(valid_test_objective) == plateau_window and all(
-                torch.isfinite(torch.tensor(valid_test_objective))
-            ):
-                rolling_objective = sum(valid_test_objective) / plateau_window
+            if warmed_up and np.isfinite(test_objective[-1]):
+                validation_block.append(float(test_objective[-1]))
+            if len(validation_block) == plateau_window:
+                rolling_objective = sum(validation_block) / plateau_window
+                validation_block.clear()
+                self.monitor_epochs.append(epoch - 1)
+                self.monitor_objective.append(rolling_objective)
                 previous_lrs = [
                     param_group["lr"] for param_group in self.optimizer.param_groups
                 ]
-                scheduler.step(rolling_objective)
-                if any(
+                if plateau_scheduler is not None:
+                    plateau_scheduler.step(rolling_objective)
+                if plateau_scheduler is not None and any(
                     param_group["lr"] != previous_lr
                     for param_group, previous_lr in zip(
                         self.optimizer.param_groups, previous_lrs
@@ -580,10 +711,17 @@ class Trainer:
                     # The scheduler responds to the metric from the epoch
                     # just completed, whose index is ``epoch - 1`` here.
                     self.lr_change_epochs.append(epoch - 1)
-                if (
-                    rolling_objective
-                    < best_rolling_objective - plateau_min_delta
-                ):
+                if plateau_threshold_mode == "abs":
+                    improved = (
+                        rolling_objective
+                        < best_rolling_objective - plateau_min_delta
+                    )
+                else:
+                    improved = (
+                        rolling_objective
+                        < best_rolling_objective * (1.0 - plateau_min_delta)
+                    )
+                if improved:
                     best_rolling_objective = rolling_objective
                     plateau_count = 0
                 else:
@@ -595,12 +733,13 @@ class Trainer:
                     rolling_objective=f"{rolling_objective:.4g}",
                 )
 
-            if epoch >= planned_epochs:
-                plateaued = plateau_count >= plateau_patience
-                if plateaued:
+                if early_stopping and plateau_count >= plateau_patience:
+                    self.stop_reason = "early_stopping"
                     break
 
+            if epoch >= planned_epochs:
                 if max_training_time is None:
+                    self.stop_reason = "epoch_budget"
                     break
 
                 # Estimate the maximum number of epochs that fit in the
@@ -612,6 +751,7 @@ class Trainer:
                     int(max_training_time / mean_epoch_time),
                 )
                 if epoch >= time_limited_epochs:
+                    self.stop_reason = "time_limit"
                     break
 
                 planned_epochs = min(
@@ -622,24 +762,43 @@ class Trainer:
                 pbar.refresh()
 
         pbar.close()
+        if self.stop_reason == "running":
+            self.stop_reason = "epoch_budget"
         self.epochs = len(self.train_var)
         plt.ioff()
         # plt.close("all")
 
     def best_alphas(self, window: int = 20) -> torch.Tensor:
-        """Return fields from the best finite validation epoch in a final window."""
+        """Return the best validation field over the complete training run.
+
+        ``window`` smooths checkpoint scores over consecutive validation
+        epochs. The field at the end of the lowest-scoring window is
+        returned. Training scores are used only when no validation score is
+        finite.
+        """
         if not self.alpha_record:
             raise RuntimeError("training has not recorded any alphas")
-        window = min(window, len(self.alpha_record))
-        test_values = torch.as_tensor(
-            self._selection_history("test")[-window:]
-        )
-        finite = torch.isfinite(test_values)
-        if finite.any():
-            scores = torch.where(finite, test_values, torch.inf)
-        else:
-            scores = torch.as_tensor(
-                self._selection_history("train")[-window:]
-            )
+        if window < 1:
+            raise ValueError("window must be positive")
+
+        def smoothed_scores(values: Sequence[float]) -> torch.Tensor:
+            history = torch.as_tensor(values, dtype=torch.float64)
+            scores = torch.full_like(history, torch.inf)
+            observed = torch.nonzero(
+                torch.isfinite(history), as_tuple=False
+            ).flatten()
+            for end in range(window - 1, len(observed)):
+                block_indices = observed[end - window + 1:end + 1]
+                scores[block_indices[-1]] = history[block_indices].mean()
+            if not torch.isfinite(scores).any():
+                scores = torch.where(
+                    torch.isfinite(history), history, torch.inf
+                )
+            return scores
+
+        scores = smoothed_scores(self._selection_history("test"))
+        if not torch.isfinite(scores).any():
+            scores = smoothed_scores(self._selection_history("train"))
         best_index = int(torch.argmin(scores).item())
-        return self.alpha_record[-window:][best_index]
+        self.best_epoch = best_index
+        return self.alpha_record[best_index]

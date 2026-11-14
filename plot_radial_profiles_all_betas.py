@@ -1,4 +1,4 @@
-"""Plot every saved 2D radial-profile result for the Figure 5 comparison.
+"""Plot every saved 2D radial-profile result for the radial-profile comparison.
 
 This script only reads the already-scaled fields in ``training_data``. It does
 not load ensembles, refit profile scales, or rerun an optimization.
@@ -243,12 +243,12 @@ def main() -> None:
     cp2_profiles = _load_cp2_profiles()
     _plot_panel(
         xy_profiles,
-        FIGS / "fig5_xy_radial_profiles.pdf",
+        FIGS / "xy_radial_profiles.pdf",
         model_name="XY",
     )
     _plot_panel(
         cp2_profiles,
-        FIGS / "fig5_cp2_radial_profiles.pdf",
+        FIGS / "cp2_radial_profiles.pdf",
         model_name="CP(2)",
     )
 

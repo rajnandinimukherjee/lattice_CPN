@@ -663,7 +663,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.alpha_grid_points < 3:
         raise ValueError("alpha-grid-points must be at least 3")
     output = args.output or Path(
-        f"plots/fig5_cp{args.cp_n}_radial_profiles_b{args.beta:.2f}.pdf"
+        f"plots/cp{args.cp_n}_radial_profiles_b{args.beta:.2f}.pdf"
     )
     ensemble = args.ensemble or Path(
         f"data/cp{args.cp_n}_gauge_dim2_b{args.beta:.2f}_"

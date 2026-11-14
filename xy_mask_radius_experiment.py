@@ -78,7 +78,7 @@ ENSEMBLE = Path(
 )
 SCAN_DATA_DIRECTORY = Path("training_data/xy_mask_radius_scan")
 FIGURES_DIRECTORY = Path("paper/figs")
-OUTPUT_STEM = "fig7_xy_mask_radius"
+OUTPUT_STEM = "xy_mask_radius"
 
 # The box side is min(2R+1, L), so R=15 is the largest support that is still
 # a proper subset of the 32^2 lattice.  R=6 is the radius used everywhere

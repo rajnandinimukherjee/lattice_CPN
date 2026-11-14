@@ -53,7 +53,7 @@ LATTICE_SIZE = 64
 SOURCE = (0, 0)
 COLOR_INDICES = (0, 1)
 DEFAULT_ENSEMBLE = Path("data/cp2_gauge_dim2_b3.30_L64_ens.npy")
-DEFAULT_OUTPUT = Path("paper/figs/fig1_locality_cpn.pdf")
+DEFAULT_OUTPUT = Path("paper/figs/locality_cpn.pdf")
 COMPARISON_DATA_DIRECTORY = Path(
     "training_data/locality_comparison_near_zero"
 )

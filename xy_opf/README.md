@@ -50,7 +50,7 @@ MPLBACKEND=Agg python xy_OPF_analysis.py --run --dims 1 --Ls 64 \
 MPLBACKEND=Agg python xy_OPF_analysis.py --run --dims 2 3 --Ls 32 16 \
   --loss-function approx3 --mask-radius 6 --no-plot-training
 MPLBACKEND=Agg python xy_OPF_analysis.py --no-run --dims 1 2 3 --Ls 64 32 16 \
-  --save-plot paper/figs/fig4_xy_scaling.pdf
+  --save-plot paper/figs/xy_scaling.pdf
 ```
 
 For a configuration-dependent XY deformation, select

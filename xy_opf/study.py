@@ -12,8 +12,12 @@ from observables import XYOnePtFn
 from training import plot_exported_training
 
 from .config import DATA_DIRECTORY, LOSS_FUNCTIONS
-from .objectives import train_penalty_loss, train_variance_loss
-from .optimization import run_saddle_point
+from .objectives import (
+    train_field_dependent_variance_loss,
+    train_penalty_loss,
+    train_variance_loss,
+)
+from .optimization import fit_lattice_laplace_profile, run_saddle_point
 from .persistence import (
     beta_key,
     delete_beta_training_data,
@@ -216,7 +220,10 @@ def _run_dimension(
         obs_str = f"OPF {source}"
         split_mask = (
             make_split_mask(fields)
-            if any(loss != "saddle-point" for loss in loss_functions)
+            if any(
+                loss not in {"saddle-point", "approx3"}
+                for loss in loss_functions
+            )
             else None
         )
 
@@ -234,17 +241,73 @@ def _run_dimension(
                 source=source,
                 split_mask=split_mask,
             )
-            if loss_function == "saddle-point":
+            if loss_function == "approx3":
+                result = fit_lattice_laplace_profile(
+                    fields,
+                    beta,
+                    source,
+                    mask_radius=args.mask_radius,
+                    alpha_bounds=tuple(args.alpha_bounds),
+                    alpha_grid_points=args.alpha_grid_points,
+                    alpha_xatol=args.alpha_xatol,
+                )
+                variance_ratio = float(result["variance_ratio"])
+                scaled_field = np.asarray(result["scaled_field"])
+                diagnostics = dict(result["optimization_diagnostics"])
+                metadata = {
+                    "loss_function": "approx3",
+                    "objective_name": "Approximation 3 lattice Laplace",
+                    "ndim": int(ndim),
+                    "beta": float(beta),
+                    "lattice_size": tuple(int(length) for length in latsize),
+                    "source": tuple(int(coordinate) for coordinate in source),
+                    "field_at_source": float(
+                        scaled_field[*source, 0]
+                    ),
+                    "mask_radius": int(args.mask_radius),
+                    "configuration_count": int(len(fields)),
+                    "alpha_bounds": tuple(
+                        float(value) for value in args.alpha_bounds
+                    ),
+                    "alpha_grid_points": int(args.alpha_grid_points),
+                    "alpha_xatol": float(args.alpha_xatol),
+                    "optimizer": "coarse grid plus bounded scalar refinement",
+                }
+                saved_training.parent.mkdir(parents=True, exist_ok=True)
+                np.save(
+                    saved_training,
+                    {
+                        "metadata": metadata,
+                        "loss_function": "approx3",
+                        "objective_name": metadata["objective_name"],
+                        "optimization_diagnostics": diagnostics,
+                        "f_x": np.asarray(result["f_x"]),
+                        "learned_field": np.asarray(result["f_x"]),
+                        "alpha_scale": float(result["alpha_scale"]),
+                        "scaled_field": scaled_field,
+                        "variance_ratio": variance_ratio,
+                    },
+                    allow_pickle=True,
+                )
+                print(
+                    f"Approximation 3: alpha={result['alpha_scale']:.8g}, "
+                    f"variance ratio={variance_ratio:.8g}, "
+                    f"Laplace residual="
+                    f"{diagnostics['max_abs_laplace_residual']:.3g}; "
+                    f"saved {saved_training}"
+                )
+            elif loss_function == "saddle-point":
                 variance_ratio = run_saddle_point(
                     **common_arguments,
                     result_savename=saved_training,
                 )
             else:
-                train_function = (
-                    train_variance_loss
-                    if loss_function == "variance"
-                    else train_penalty_loss
-                )
+                train_functions = {
+                    "variance": train_variance_loss,
+                    "penalty": train_penalty_loss,
+                    "field-dependent": train_field_dependent_variance_loss,
+                }
+                train_function = train_functions[loss_function]
                 variance_ratio = train_function(
                     **common_arguments,
                     training_savename=saved_training,

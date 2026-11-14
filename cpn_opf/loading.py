@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import gc
 from os import PathLike
 import warnings
 
@@ -399,3 +400,168 @@ def load_ensemble(
         f"stride={stride}, limited_by={limiting_name}"
     )
     return fields, links, loaded_beta
+
+
+def load_approx3_ensemble(
+    filename: str | PathLike[str],
+    *,
+    n: int,
+    ndim: int,
+    lattice_size: int,
+    beta: float,
+    i: int,
+    j: int,
+    decorrelation_factor: float = 1.0,
+    max_configurations: int = 1280,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float | int | str]]:
+    """Load a bounded split-real gauge sample for Approximation 3 fits.
+
+    The CP(N) gauge files store split-real fields in a pickled mapping and can
+    occupy several gigabytes. This loader computes autocorrelation diagnostics
+    directly from those arrays, then converts only the selected configurations
+    to the interleaved format used by the deformation model.
+    """
+    if not np.isfinite(decorrelation_factor) or decorrelation_factor <= 0:
+        raise ValueError("decorrelation_factor must be positive and finite")
+    if max_configurations < 2:
+        raise ValueError("max_configurations must be at least two")
+    if not 0 <= i <= n or not 0 <= j <= n:
+        raise ValueError("OPF component indices must lie between 0 and N")
+
+    payload = _payload_from_file(filename)
+    if "x" not in payload or "lam" not in payload:
+        raise KeyError(
+            "bounded Approximation 3 loading expects split-real x and lam arrays"
+        )
+    raw_fields = np.asarray(payload["x"])
+    raw_links = np.asarray(payload["lam"])
+    channels = n + 1
+    lattice = (int(lattice_size),) * int(ndim)
+    expected_field_tail = (2 * channels, *lattice)
+    expected_link_tail = (int(ndim), *lattice)
+    if raw_fields.ndim != ndim + 3 or tuple(raw_fields.shape[2:]) != expected_field_tail:
+        raise ValueError(
+            f"x must have shape (chains, time, {expected_field_tail}), "
+            f"got {raw_fields.shape}"
+        )
+    if raw_links.ndim != ndim + 3 or tuple(raw_links.shape[2:]) != expected_link_tail:
+        raise ValueError(
+            f"lam must have shape (chains, time, {expected_link_tail}), "
+            f"got {raw_links.shape}"
+        )
+    if raw_fields.shape[:2] != raw_links.shape[:2]:
+        raise ValueError("field and link chain/time dimensions do not match")
+    chains, time_extent = raw_fields.shape[:2]
+
+    diagnostics: list[tuple[float, str]] = []
+    raw_energy = _lookup(payload, _ENERGY_KEYS, "energies", required=False)
+    if raw_energy is not None:
+        energy = np.asarray(raw_energy, dtype=np.float64)
+        if energy.ndim in (1, 2) and energy.shape[-1] == time_extent:
+            try:
+                _, acf = autocorrelation(energy)
+                diagnostics.append(
+                    (integrated_autocorrelation_time(acf), "energy")
+                )
+            except (ValueError, RuntimeError):
+                pass
+
+    density_series = np.empty((channels, chains, time_extent), dtype=np.float64)
+    off_diagonal_series = np.empty((chains, time_extent), dtype=np.float64)
+    spatial_axes = tuple(range(1, ndim + 1))
+    for chain in range(chains):
+        chain_fields = raw_fields[chain]
+        for channel in range(channels):
+            real = chain_fields[:, channel]
+            imag = chain_fields[:, channels + channel]
+            density_series[channel, chain] = np.mean(
+                real * real + imag * imag, axis=spatial_axes
+            )
+        real_i = chain_fields[:, i]
+        real_j = chain_fields[:, j]
+        imag_i = chain_fields[:, channels + i]
+        imag_j = chain_fields[:, channels + j]
+        off_diagonal_series[chain] = np.mean(
+            real_i * real_j + imag_i * imag_j, axis=spatial_axes
+        )
+
+    def add_diagnostic(values: np.ndarray, name: str) -> None:
+        try:
+            _, acf = autocorrelation(values)
+            diagnostics.append((integrated_autocorrelation_time(acf), name))
+        except (ValueError, RuntimeError):
+            return
+
+    for channel in range(channels):
+        add_diagnostic(density_series[channel], f"P_{channel}{channel}")
+    add_diagnostic(off_diagonal_series, f"Re(P_{i}{j})")
+    if not diagnostics:
+        raise ValueError("could not estimate ensemble autocorrelation")
+    limiting_tau, limiting_name = max(diagnostics, key=lambda item: item[0])
+    stride = max(
+        1,
+        int(np.ceil(decorrelation_factor * 2.0 * limiting_tau)),
+    )
+
+    time_indices = np.arange(0, time_extent, stride, dtype=np.int64)
+    max_per_chain = max(1, max_configurations // chains)
+    n_per_chain = min(len(time_indices), max_per_chain)
+    if n_per_chain < len(time_indices):
+        selection = np.linspace(
+            0, len(time_indices) - 1, n_per_chain, dtype=np.int64
+        )
+        time_indices = time_indices[selection]
+
+    selected_fields = raw_fields[:, time_indices]
+    selected_links = raw_links[:, time_indices]
+    field_order = (0, 1, *range(3, 3 + ndim), 2)
+    field_channels_last = selected_fields.transpose(field_order)
+    interleaved = np.empty(
+        (*field_channels_last.shape[:-1], 2 * channels), dtype=np.float32
+    )
+    interleaved[..., 0::2] = field_channels_last[..., :channels]
+    interleaved[..., 1::2] = field_channels_last[..., channels:]
+    interleaved = np.ascontiguousarray(
+        interleaved.reshape(-1, *lattice, 2 * channels)
+    )
+    links_channels_last = selected_links.transpose(field_order)
+    links_channels_last = np.ascontiguousarray(
+        links_channels_last.reshape(-1, *lattice, ndim), dtype=np.float32
+    )
+    if len(interleaved) < 2:
+        raise ValueError("at least two decorrelated configurations are required")
+
+    effective_stride = (
+        int(np.median(np.diff(time_indices)))
+        if len(time_indices) > 1
+        else stride
+    )
+    info: dict[str, float | int | str] = {
+        "tau_int": float(limiting_tau),
+        "limited_by": limiting_name,
+        "stride": int(stride),
+        "effective_stride": int(effective_stride),
+        "n_used": int(len(interleaved)),
+        "effective_sample_size": float(
+            chains * time_extent / (2.0 * limiting_tau)
+        ),
+        "max_configurations": int(max_configurations),
+    }
+    loaded_beta = payload.get("beta")
+    if loaded_beta is not None and not np.isclose(float(loaded_beta), beta):
+        warnings.warn(
+            f"{filename} stores beta={float(loaded_beta):g}, "
+            f"but beta={beta:g} was requested",
+            stacklevel=2,
+        )
+
+    del payload, raw_fields, raw_links, selected_fields, selected_links
+    del field_channels_last, density_series, off_diagonal_series
+    del chain_fields, real, imag, real_i, real_j, imag_i, imag_j
+    gc.collect()
+    print(
+        f"Approximation 3 ensemble: tau_int={limiting_tau:.3f} "
+        f"({limiting_name}), stride={stride}, selected={len(interleaved)}/"
+        f"{chains * time_extent}, ESS~{info['effective_sample_size']:.0f}"
+    )
+    return torch.from_numpy(interleaved), torch.from_numpy(links_channels_last), info

@@ -48,7 +48,8 @@ them, they are ignored.
 
 By default the study compares direct `variance` minimisation, `penalty`
 minimisation of `<exp(-2 Re Delta S)>`, and the numerical CP(N)
-small-fluctuation `approx2` profile. The penalty objective fixes a unit-norm
+small-fluctuation `approx2` and smooth-deformation `approx3` profiles. The
+penalty objective fixes a unit-norm
 deformation vector at the source to break the zero-field stationary point:
 for `i != j`, the `i` component is `1/sqrt(2)`, the `j` component is
 `-1/sqrt(2)`, and every other source component is zero; for `i == j`, the `i`
@@ -56,8 +57,16 @@ component is one. It then numerically chooses a scalar `alpha` to minimize
 the full-ensemble OPF variance. Approximation 2 solves its small-fluctuation
 penalty on the same localized support, then optimizes one overall scale
 against the ensemble. Approximation 2 is available for the gauge action.
-Use `--loss-function variance`, `--loss-function penalty`, or
-`--loss-function approx2` to select one objective. The penalty scale search
+Approximation 3 solves the nonlinear smooth-deformation metric penalty,
+initialized from the Approximation 2 profile, then optimizes its scale against
+the full OPF variance. Approximation 3 is available for the gauge action and
+uses at most 1,280 decorrelated configurations by default; each beta result
+and the ratio index are saved as the scan proceeds. Matching saved results are
+reused on a rerun. Use `--recompute-approx3` to replace them, or adjust the
+sample cap with `--approx3-max-configurations`.
+Use `--loss-function variance`, `--loss-function penalty`,
+`--loss-function approx2`, or `--loss-function approx3` to select one
+objective. The penalty scale search
 accepts `--alpha-bounds LOWER UPPER`, `--alpha-grid-points`, and
 `--alpha-xatol`, as in the XY analysis. Approximation 2 accepts
 `--approx2-maxiter`, `--approx2-gtol`, and `--approx2-ftol` for its numerical

@@ -33,6 +33,11 @@ SCALING_STYLES = {
         "marker": "^",
         "label": "Approx. 2 (small fluc.)",
     },
+    "approx3": {
+        "color": "tab:red",
+        "marker": "D",
+        "label": "Approx. 3 (smooth deformation)",
+    },
 }
 
 
@@ -67,7 +72,7 @@ def plot_scaling(
         sharex="col",
         sharey="row",
         squeeze=False,
-        figsize=(fig_width, 0.68 * fig_width),
+        figsize=(fig_width, 0.56 * fig_width),
     )
     for dim_idx, dim in enumerate(dims):
         ratio_ax = axes[0, dim_idx]
@@ -131,8 +136,7 @@ def plot_scaling(
             plot_ax.set_axisbelow(True)
             plot_ax.grid(color="0.8", lw=0.5, alpha=0.5)
             if dim_idx > 0:
-                plot_ax.spines["left"].set_visible(False)
-                plot_ax.tick_params(axis="y", left=False, labelleft=False)
+                plot_ax.tick_params(axis="y", left=True, labelleft=False)
         field_ax.xaxis.set_major_locator(
             MaxNLocator(nbins=5, prune="both")
         )
@@ -208,7 +212,7 @@ def plot_scaling(
     )
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92), w_pad=0.0, h_pad=0.0)
-    fig.subplots_adjust(wspace=0.0, hspace=0.0, bottom=0.13, top=0.82)
+    fig.subplots_adjust(wspace=0.025, hspace=0.04, bottom=0.13, top=0.82)
     if output_path is not None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

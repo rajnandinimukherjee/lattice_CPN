@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from .config import LOSS_FUNCTIONS
+from .config import LOSS_FUNCTION_CHOICES
 from .persistence import beta_key
 
 
@@ -147,9 +147,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--loss-function",
-        choices=LOSS_FUNCTIONS,
+        choices=LOSS_FUNCTION_CHOICES,
         default=None,
         help="operate on only one objective; omit to use all objectives",
+    )
+    parser.add_argument(
+        "--field-dependent-init",
+        choices=("zero", "fixed-profile"),
+        default="zero",
+        help=(
+            "initialize field-dependent XY training from a zero profile "
+            "or the saved field-independent variance profile"
+        ),
     )
     parser.add_argument(
         "--alpha-bounds",

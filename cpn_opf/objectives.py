@@ -18,7 +18,11 @@ from training import WEIGHT_INIT_STD, init_weights
 
 from .config import BEST_WINDOW
 from .model import CPnHomogeneousDeformations
-from .optimization import optimize_field_scale, solve_approx2_penalty_field
+from .optimization import (
+    optimize_field_scale,
+    solve_approx2_penalty_field,
+    solve_approx3_penalty_field,
+)
 from .training import (
     make_model,
     make_split_mask,
@@ -702,5 +706,136 @@ def solve_approx2_loss(
         f"penalty exponent = {diagnostics['penalty_exponent']:.8g}\n"
         f"alpha = {alpha:.8g}\n"
         f"Var: def/undef = {variance_ratio:.8g}"
+    )
+    return variance_ratio
+
+
+def solve_approx3_loss(
+    fields: torch.Tensor,
+    links: torch.Tensor | None,
+    *,
+    n: int,
+    action_type: str,
+    ndim: int,
+    beta: float,
+    obs: CPnOnePtFn,
+    args: argparse.Namespace,
+    source: tuple[int, ...],
+    i: int,
+    j: int,
+    training_savename: str | Path,
+    device: torch.device,
+    split_mask: torch.Tensor | None = None,
+    approx3_signature: dict[str, object] | None = None,
+) -> float:
+    """Solve Approximation 3, optimize its scale, and save the result."""
+    del split_mask
+    if action_type != "gauge":
+        raise ValueError("CP(N) Approximation 3 is defined for the gauge action")
+    if links is None:
+        raise ValueError("CP(N) Approximation 3 requires gauge links")
+
+    latsize = tuple(int(length) for length in fields.shape[1:-1])
+    if len(latsize) != ndim:
+        raise ValueError("the CP(N) field shape does not match the dimension")
+    approx2_profile, approx2_diagnostics = solve_approx2_penalty_field(
+        latsize,
+        source,
+        beta,
+        cp_n=n,
+        i=i,
+        j=j,
+        mask_radius=args.mask_radius,
+        maxiter=args.approx2_maxiter,
+        gtol=args.approx2_gtol,
+        ftol=args.approx2_ftol,
+    )
+    field, diagnostics = solve_approx3_penalty_field(
+        latsize,
+        source,
+        beta,
+        cp_n=n,
+        i=i,
+        j=j,
+        mask_radius=args.mask_radius,
+        initial_field=approx2_profile,
+    )
+
+    model = CPnHomogeneousDeformations(
+        n, action_type=action_type, device=device
+    ).to(device)
+    model.samples = {"all": fields}
+    model.set_gauge_samples({"all": links})
+    variance_loss = VarianceLoss(model, obs)
+    if variance_loss.initial_var <= 0:
+        raise ValueError("undeformed CP(N) OPF variance must be positive")
+
+    profile = torch.as_tensor(field, dtype=fields.dtype, device=device)
+    scale_variance = _local_gauge_variance_evaluator(
+        fields,
+        links,
+        profile,
+        model,
+        beta=beta,
+        i=i,
+        j=j,
+        source=source,
+    )
+    alpha, optimized_variance = optimize_field_scale(
+        profile,
+        variance_loss,
+        bounds=tuple(args.alpha_bounds),
+        grid_points=args.alpha_grid_points,
+        xatol=args.alpha_xatol,
+        variance_evaluator=scale_variance,
+    )
+    scaled_field = alpha * profile
+    variance_ratio = float(optimized_variance / variance_loss.initial_var)
+    field_array = profile.detach().cpu().numpy()
+    scaled_array = scaled_field.detach().cpu().numpy()
+    metadata = {
+        "loss_function": "approx3",
+        "objective_name": "smooth-deformation Approximation 3",
+        "approximation": 3,
+        "cp_n": int(n),
+        "action_type": action_type,
+        "ndim": int(ndim),
+        "beta": float(beta),
+        "lattice_size": latsize,
+        "source": tuple(int(coordinate) for coordinate in source),
+        "i": int(i),
+        "j": int(j),
+        "field_at_source": float(field_array[*source, i]),
+        "field_norm_at_source": float(np.linalg.norm(field_array[*source])),
+        "mask_radius": int(args.mask_radius),
+        "optimizer": "L-BFGS-B",
+        "scale_optimizer": "grid plus bounded scalar minimization",
+        "objective": "CP(N) smooth-deformation metric penalty",
+        "alpha_bounds": tuple(float(value) for value in args.alpha_bounds),
+        "ensemble_configurations": int(len(fields)),
+        "approx3_signature": approx3_signature,
+    }
+    result_path = Path(training_savename)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(
+        result_path,
+        {
+            "metadata": metadata,
+            "loss_function": "approx3",
+            "learned_field": field_array,
+            "alpha_scale": float(alpha),
+            "scaled_field": scaled_array,
+            "variance_ratio": variance_ratio,
+            "optimization_diagnostics": diagnostics,
+            "approx2_initialization_diagnostics": approx2_diagnostics,
+        },
+        allow_pickle=True,
+    )
+    print(
+        f"-----CP(N) Approximation 3 ({i},{j})-----------------\n"
+        f"penalty exponent = {diagnostics['penalty_exponent']:.8g}\n"
+        f"alpha = {alpha:.8g}\n"
+        f"Var: def/undef = {variance_ratio:.8g}; "
+        f"saved {result_path}"
     )
     return variance_ratio

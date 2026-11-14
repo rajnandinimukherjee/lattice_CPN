@@ -8,16 +8,18 @@ BEST_WINDOW = 20
 DATA_DIRECTORY = Path("data")
 TRAINING_DATA_DIRECTORY = Path("training_data")
 
-LOSS_FUNCTIONS = ("variance", "penalty", "approx2")
+LOSS_FUNCTIONS = ("variance", "penalty", "approx2", "approx3")
 LOSS_LABELS = {
     "variance": r"direct variance",
     "penalty": r"Approx. 1 (weak corr.)",
     "approx2": r"Approx. 2 (small fluc.)",
+    "approx3": r"Approx. 3 (smooth deforms)",
 }
 LOSS_MARKERS = {
     "variance": "o",
     "penalty": "s",
     "approx2": "^",
+    "approx3": "D",
 }
 
 # The d=3 ferromagnetic CP(2) gauge model has a weak first-order transition.

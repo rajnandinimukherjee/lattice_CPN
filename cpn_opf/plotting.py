@@ -47,6 +47,12 @@ SCALING_STYLES = {
         "marker": "^",
         "label": "Approx. 2 (small fluc.)",
     },
+    "approx3": {
+        "color": "tab:red",
+        "marker": "D",
+        "size": 12,
+        "label": "Approx. 3 (smooth deformation)",
+    },
 }
 
 
@@ -211,7 +217,7 @@ def plot_scaling(
         sharex="col",
         sharey="row",
         squeeze=False,
-        figsize=(fig_width, 0.68 * fig_width),
+        figsize=(fig_width, 0.56 * fig_width),
     )
     for dim_idx, ndim in enumerate(dims):
         ratio_ax, field_ax = axes[:, dim_idx]
@@ -247,14 +253,14 @@ def plot_scaling(
                 ratios,
                 color=style["color"],
                 marker=style["marker"],
-                s=20,
+                s=style.get("size", 20),
             )
             field_ax.scatter(
                 temperatures,
                 source_values,
                 color=style["color"],
                 marker=style["marker"],
-                s=20,
+                s=style.get("size", 20),
             )
         ratio_ax.axhline(1.0, color="black", lw=0.8, zorder=1)
         ratio_ax.set_title(
@@ -265,8 +271,7 @@ def plot_scaling(
             axis.set_axisbelow(True)
             axis.grid(color="0.8", lw=0.5, alpha=0.5)
             if dim_idx > 0:
-                axis.spines["left"].set_visible(False)
-                axis.tick_params(axis="y", left=False, labelleft=False)
+                axis.tick_params(axis="y", left=True, labelleft=False)
         field_ax.xaxis.set_major_locator(MaxNLocator(nbins=5, prune="both"))
 
         critical_temperature = (
@@ -334,7 +339,7 @@ def plot_scaling(
         )
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92), w_pad=0.0, h_pad=0.0)
-    fig.subplots_adjust(wspace=0.0, hspace=0.0, bottom=0.13, top=0.82)
+    fig.subplots_adjust(wspace=0.025, hspace=0.04, bottom=0.13, top=0.82)
     if filename is not None:
         output = Path(filename)
         output.parent.mkdir(parents=True, exist_ok=True)

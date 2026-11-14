@@ -102,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approx2-maxiter", type=int, default=2000)
     parser.add_argument("--approx2-gtol", type=float, default=1e-9)
     parser.add_argument("--approx2-ftol", type=float, default=1e-12)
+    parser.add_argument(
+        "--approx3-max-configurations",
+        type=int,
+        default=1280,
+        help="maximum decorrelated configurations used for Approximation 3 fits",
+    )
+    parser.add_argument(
+        "--recompute-approx3",
+        action="store_true",
+        help="recompute Approximation 3 results even when a matching result is saved",
+    )
     parser.add_argument("--device", choices=("auto", "cpu",
                         "cuda", "mps"), default="auto")
     parser.add_argument("--run", action=argparse.BooleanOptionalAction,
@@ -185,15 +196,22 @@ def validate_args(
         parser.error("--alpha-xatol must be positive and finite")
     if args.approx2_maxiter < 1:
         parser.error("--approx2-maxiter must be positive")
+    if args.approx3_max_configurations < 2:
+        parser.error("--approx3-max-configurations must be at least two")
     if not math.isfinite(args.approx2_gtol) or args.approx2_gtol <= 0:
         parser.error("--approx2-gtol must be positive and finite")
     if not math.isfinite(args.approx2_ftol) or args.approx2_ftol <= 0:
         parser.error("--approx2-ftol must be positive and finite")
-    if args.loss_function == "approx2" and args.action != "gauge":
-        parser.error("Approximation 2 is available only for the gauge action")
-    if args.variance_init_from_approx2 and args.action != "gauge":
-        parser.error("Approximation 2 initialization requires the gauge action")
-    if args.penalty_init_from_approx2 and args.action != "gauge":
+    if (
+        args.loss_function in {"approx2", "approx3"}
+        and args.action != "gauge"
+    ):
+        parser.error(
+            "Approximations 2 and 3 are available only for the gauge action"
+        )
+    if (
+        args.variance_init_from_approx2 or args.penalty_init_from_approx2
+    ) and args.action != "gauge":
         parser.error("Approximation 2 initialization requires the gauge action")
 
 

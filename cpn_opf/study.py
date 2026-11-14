@@ -15,9 +15,10 @@ from observables import CPnOnePtFn
 from training import plot_exported_training
 
 from .config import LOSS_FUNCTIONS, TRAINING_DATA_DIRECTORY
-from .loading import load_ensemble
+from .loading import load_approx3_ensemble, load_ensemble
 from .objectives import (
     solve_approx2_loss,
+    solve_approx3_loss,
     train_penalty_loss,
     train_variance_loss,
 )
@@ -102,6 +103,55 @@ def _ensemble_file_for_beta(
     return canonical
 
 
+def _approx3_signature(
+    args: argparse.Namespace,
+    *,
+    ndim: int,
+    lattice_size: int,
+    beta: float,
+    ensemble_file: Path,
+) -> dict[str, object]:
+    """Fingerprint inputs that affect a saved Approximation 3 fit."""
+    stat = ensemble_file.stat()
+    return {
+        "cp_n": int(args.N),
+        "ndim": int(ndim),
+        "beta": float(beta),
+        "lattice_size": [int(lattice_size)] * ndim,
+        "source": [0] * ndim,
+        "i": int(args.i),
+        "j": int(args.j),
+        "mask_radius": int(args.mask_radius),
+        "decorrelation_factor": float(args.decorrelation),
+        "max_configurations": int(args.approx3_max_configurations),
+        "alpha_bounds": [float(value) for value in args.alpha_bounds],
+        "alpha_grid_points": int(args.alpha_grid_points),
+        "alpha_xatol": float(args.alpha_xatol),
+        "ensemble": {
+            "path": str(ensemble_file.resolve()),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        },
+    }
+
+
+def _cached_approx3_ratio(
+    result_file: Path,
+    signature: dict[str, object],
+) -> float | None:
+    """Return a matching finite saved ratio, or ``None`` for stale results."""
+    if not result_file.exists():
+        return None
+    try:
+        payload = np.load(result_file, allow_pickle=True).item()
+        if payload.get("metadata", {}).get("approx3_signature") != signature:
+            return None
+        ratio = float(payload["variance_ratio"])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return ratio if np.isfinite(ratio) else None
+
+
 def run_analysis(args: argparse.Namespace) -> None:
     """Train or load CP(N) OPF scaling results and produce the summary plot."""
     loss_functions = (
@@ -110,7 +160,7 @@ def run_analysis(args: argparse.Namespace) -> None:
         else [
             loss
             for loss in LOSS_FUNCTIONS
-            if args.action == "gauge" or loss != "approx2"
+            if args.action == "gauge" or loss not in {"approx2", "approx3"}
         ]
     )
     requested_betas = sorted({beta_key(beta) for beta in args.betas})
@@ -286,7 +336,7 @@ def _load_dimension(
                 args.action,
             )
         )
-        if args.plot_training and loss_function != "approx2":
+        if args.plot_training and loss_function not in {"approx2", "approx3"}:
             for beta, artifact in artifacts:
                 plot_exported_training(
                     artifact,
@@ -336,17 +386,86 @@ def _run_dimension(
     for beta, ensemble_file in ensembles:
         if not ensemble_file.exists():
             raise FileNotFoundError(ensemble_file)
-        fields, links, saved_beta = load_ensemble(
-            ensemble_file,
-            n=args.N,
-            ndim=ndim,
-            lattice_size=lattice_size,
-            beta=beta,
-            action_type=args.action,
-            i=args.i,
-            j=args.j,
-            decorrelation_factor=args.decorrelation,
+        approx3_signature = (
+            _approx3_signature(
+                args,
+                ndim=ndim,
+                lattice_size=lattice_size,
+                beta=beta,
+                ensemble_file=ensemble_file,
+            )
+            if "approx3" in loss_functions
+            else None
         )
+        if loss_functions == ["approx3"]:
+            approx3_result = training_savename(
+                args.N,
+                ndim,
+                beta,
+                lattice_size,
+                args.i,
+                args.j,
+                "approx3",
+                args.action,
+            )
+            cached_ratio = (
+                None
+                if getattr(args, "recompute_approx3", False)
+                else _cached_approx3_ratio(
+                    approx3_result, approx3_signature
+                )
+            )
+            if cached_ratio is not None:
+                stored["approx3"] = upsert_variance_ratios(
+                    ratio_savename(
+                        args.N,
+                        ndim,
+                        lattice_size,
+                        args.i,
+                        args.j,
+                        "approx3",
+                        args.action,
+                    ),
+                    n=args.N,
+                    ndim=ndim,
+                    lattice_size=lattice_size,
+                    i=args.i,
+                    j=args.j,
+                    loss_function="approx3",
+                    updates={beta: cached_ratio},
+                    action_type=args.action,
+                )
+                print(
+                    f"reusing saved Approximation 3 result for beta={beta:g}: "
+                    f"variance ratio={cached_ratio:.8g}"
+                )
+                continue
+
+        if loss_functions == ["approx3"]:
+            fields, links, _ = load_approx3_ensemble(
+                ensemble_file,
+                n=args.N,
+                ndim=ndim,
+                lattice_size=lattice_size,
+                beta=beta,
+                i=args.i,
+                j=args.j,
+                decorrelation_factor=args.decorrelation,
+                max_configurations=args.approx3_max_configurations,
+            )
+            saved_beta = None
+        else:
+            fields, links, saved_beta = load_ensemble(
+                ensemble_file,
+                n=args.N,
+                ndim=ndim,
+                lattice_size=lattice_size,
+                beta=beta,
+                action_type=args.action,
+                i=args.i,
+                j=args.j,
+                decorrelation_factor=args.decorrelation,
+            )
         if saved_beta is not None and not np.isclose(saved_beta, beta):
             warnings.warn(
                 f"{ensemble_file} stores beta={saved_beta:g}, but its filename "
@@ -383,6 +502,8 @@ def _run_dimension(
                 args.action,
             )
             training_kwargs = {}
+            if loss_function == "approx3":
+                training_kwargs["approx3_signature"] = approx3_signature
             initialize_variance = (
                 loss_function == "variance"
                 and args.variance_init_from_approx2
@@ -429,6 +550,7 @@ def _run_dimension(
                 "variance": train_variance_loss,
                 "penalty": train_penalty_loss,
                 "approx2": solve_approx2_loss,
+                "approx3": solve_approx3_loss,
             }[loss_function]
             ratio = train_function(
                 fields,
@@ -466,7 +588,7 @@ def _run_dimension(
                 updates={beta: ratio},
                 action_type=args.action,
             )
-            if args.plot_training and loss_function != "approx2":
+            if args.plot_training and loss_function not in {"approx2", "approx3"}:
                 plot_exported_training(
                     result,
                     fname=result.with_suffix(".png") if args.save_plot else None,

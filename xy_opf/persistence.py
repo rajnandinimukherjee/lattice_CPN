@@ -16,7 +16,11 @@ from .config import (
 
 def training_savename(ndim: int, beta: float, loss_function: str) -> Path:
     """Return an objective-specific training or numerical-result filename."""
-    suffix = "result" if loss_function == "saddle-point" else "training"
+    suffix = (
+        "result"
+        if loss_function in {"saddle-point", "approx3"}
+        else "training"
+    )
     return TRAINING_DATA_DIRECTORY / (
         f"xy_scaling_dim{ndim}_b{beta:.2f}_"
         f"loss-{loss_function}_{suffix}.npy"
@@ -198,7 +202,11 @@ def training_files_for_dimension(
 ) -> list[tuple[float, Path]]:
     """Return objective-specific saved artifacts for one dimension."""
     files = []
-    suffix = "result" if loss_function == "saddle-point" else "training"
+    suffix = (
+        "result"
+        if loss_function in {"saddle-point", "approx3"}
+        else "training"
+    )
     pattern = f"xy_scaling_dim{ndim}_b*_loss-{loss_function}_{suffix}.npy"
     for path in TRAINING_DATA_DIRECTORY.glob(pattern):
         beta_string = path.stem.split("_b", 1)[1].split("_loss-", 1)[0]
@@ -289,7 +297,6 @@ def delete_beta_training_data(
 ) -> tuple[list[Path], list[float]]:
     """Delete selected per-beta artifacts and their ratio-index entries."""
     ratio_file = ratio_savename(ndim, loss_function)
-    suffix = "result" if loss_function == "saddle-point" else "training"
     deleted_files = []
     for beta in betas:
         key = beta_key(beta)

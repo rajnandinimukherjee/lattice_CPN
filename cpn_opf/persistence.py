@@ -35,7 +35,7 @@ def action_label(action_type: str) -> str:
 
 def artifact_suffix(loss_function: str) -> str:
     """Return the per-beta artifact suffix for a CP(N) objective."""
-    return "result" if loss_function == "approx2" else "training"
+    return "result" if loss_function in {"approx2", "approx3"} else "training"
 
 
 def ensemble_savename(

@@ -95,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plateau-window", type=int, default=20)
     parser.add_argument("--plateau-patience", type=int, default=40)
     parser.add_argument("--plateau-min-delta", type=float, default=1e-3)
+    parser.add_argument("--validation-interval", type=int, default=1)
+    parser.add_argument("--validation-samples", type=int, default=None)
     parser.add_argument("--plateau-threshold-mode", choices=("abs", "rel"), default="rel")
     parser.add_argument("--lr-scheduler", choices=("constant", "cosine", "plateau"), default="cosine")
     parser.add_argument("--lr-factor", type=float, default=0.5)
@@ -127,10 +129,14 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.chunk_size < 1:
         parser.error("chunk-size must be positive")
     if args.time_separations is None:
-        args.time_separations = list(range(2, args.lattice_size // 2 + 1, 2))
+        args.time_separations = list(range(1, args.lattice_size // 2 + 1))
     args.time_separations = sorted(set(args.time_separations))
     if any(t < 1 or t > args.lattice_size // 2 for t in args.time_separations):
         parser.error("time separations must be in [1, L/2]")
+    if args.validation_interval < 1:
+        parser.error("validation-interval must be positive")
+    if args.validation_samples is not None and args.validation_samples < 2:
+        parser.error("validation-samples must be at least 2")
 
 
 def _artifact_path(args: argparse.Namespace, separation: int) -> Path:
@@ -237,6 +243,13 @@ def complex_statistics(values: np.ndarray) -> dict[str, float | complex]:
     }
 
 
+def fixed_signal_snr(signal_mean: complex, variance: float, n_cfgs: int) -> float:
+    """Use the undeformed signal with a method-specific variance estimate."""
+    if variance <= 0 or n_cfgs < 1:
+        raise ValueError("variance and configuration count must be positive")
+    return float(abs(signal_mean) * np.sqrt(n_cfgs / variance))
+
+
 def evaluate_deformed_in_chunks(
     model: torch.nn.Module,
     obs: CPnTwoPtFn,
@@ -307,11 +320,27 @@ def save_summary(
             "configuration_count": n_cfgs,
             "observable": "P_ij(0) * P_ji((0,t))",
             "variance": "E[|C - E(C)|^2]",
+            "stn_definition": (
+                "abs(mean(C_undeformed)) / "
+                "sqrt(variance(C_method) / configuration_count)"
+            ),
         },
         "time_separations": separations,
     }
     for key in keys:
         payload[key] = np.asarray([records[t][key] for t in separations])
+    for method in ("undeformed", "glued", "deformed"):
+        payload[f"fixed_signal_{method}_snr"] = np.asarray(
+            [
+                fixed_signal_snr(
+                    payload["undeformed_mean"][index],
+                    payload[f"{method}_variance"][index],
+                    int(payload["n_cfgs"][index]),
+                )
+                for index in range(len(separations))
+            ],
+            dtype=np.float64,
+        )
     destination = _summary_path(args)
     destination.parent.mkdir(parents=True, exist_ok=True)
     np.save(destination, payload, allow_pickle=True)
@@ -472,6 +501,14 @@ def run(args: argparse.Namespace) -> None:
             "n_cfgs": len(fields),
             "best_epoch": int(trainer.best_epoch or 0),
         }
+        for method, statistics in (
+            ("undeformed", undeformed),
+            ("glued", glued),
+            ("deformed", deformed),
+        ):
+            metrics[f"fixed_signal_{method}_snr"] = fixed_signal_snr(
+                undeformed["mean"], statistics["variance"], len(fields)
+            )
         extra_metadata = {
             "separation": separation,
             "sink": sink,
@@ -520,8 +557,9 @@ def run(args: argparse.Namespace) -> None:
         )
         print(
             f"t={separation:2d}: variance ratio={ratio:.4g}, "
-            f"SNR {undeformed['snr']:.4g} -> glued {glued['snr']:.4g} "
-            f"-> trained {deformed['snr']:.4g}, "
+            f"fixed-signal SNR {metrics['fixed_signal_undeformed_snr']:.4g} "
+            f"-> glued {metrics['fixed_signal_glued_snr']:.4g} "
+            f"-> trained {metrics['fixed_signal_deformed_snr']:.4g}, "
             f"best epoch={trainer.best_epoch}, "
             f"elapsed={time.monotonic() - started:.1f}s"
         )

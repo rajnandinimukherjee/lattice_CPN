@@ -225,6 +225,13 @@ def complex_statistics(values: np.ndarray) -> dict[str, float | complex]:
     }
 
 
+def fixed_signal_snr(signal_mean: complex, variance: float, n_cfgs: int) -> float:
+    """Use the undeformed signal with a method-specific variance estimate."""
+    if variance <= 0 or n_cfgs < 1:
+        raise ValueError("variance and configuration count must be positive")
+    return float(abs(signal_mean) * np.sqrt(n_cfgs / variance))
+
+
 def evaluate_deformed_in_chunks(
     model: ThetaDefs,
     obs: XYTwoPtFn,
@@ -294,6 +301,10 @@ def save_summary(
             "action": "nearest-neighbor XY",
             "observable": "exp(i*(theta_source-theta_sink))",
             "variance": "E[|C-E(C)|^2]",
+            "stn_definition": (
+                "abs(mean(C_undeformed)) / "
+                "sqrt(variance(C_method) / configuration_count)"
+            ),
             "one_point_profile": str(args.one_point_profile),
             "gluing_rule": "f(x-source) - f(x-sink)",
             "thinning_stride": diagnostics["stride"],
@@ -311,6 +322,18 @@ def save_summary(
             np.int64 if key == "n_cfgs" else np.float64
         )
         summary[key] = np.asarray([records[t][key] for t in separations], dtype=dtype)
+    for method in ("undeformed", "glued", "deformed"):
+        summary[f"fixed_signal_{method}_snr"] = np.asarray(
+            [
+                fixed_signal_snr(
+                    summary["undeformed_mean"][index],
+                    summary[f"{method}_variance"][index],
+                    int(summary["n_cfgs"][index]),
+                )
+                for index in range(len(separations))
+            ],
+            dtype=np.float64,
+        )
     output = _summary_path(args)
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, summary, allow_pickle=True)
@@ -441,6 +464,14 @@ def run(args: argparse.Namespace) -> None:
             "n_cfgs": len(fields),
             "best_epoch": int(trainer.best_epoch or 0),
         }
+        for method, statistics in (
+            ("undeformed", undeformed),
+            ("glued", glued),
+            ("deformed", deformed),
+        ):
+            metrics[f"fixed_signal_{method}_snr"] = fixed_signal_snr(
+                undeformed["mean"], statistics["variance"], len(fields)
+            )
         save_training_result(
             destination,
             trainer,
@@ -479,8 +510,9 @@ def run(args: argparse.Namespace) -> None:
         )
         print(
             f"t={separation:2d}: variance ratio={ratio:.4g}, "
-            f"SNR {undeformed['snr']:.4g} -> glued {glued['snr']:.4g} "
-            f"-> trained {deformed['snr']:.4g}, "
+            f"fixed-signal SNR {metrics['fixed_signal_undeformed_snr']:.4g} "
+            f"-> glued {metrics['fixed_signal_glued_snr']:.4g} "
+            f"-> trained {metrics['fixed_signal_deformed_snr']:.4g}, "
             f"best epoch={trainer.best_epoch}, "
             f"elapsed={time.monotonic() - started:.1f}s"
         )

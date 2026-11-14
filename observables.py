@@ -270,6 +270,37 @@ class XYOnePtFn:
         obs = torch.exp(1j * theta1)
         return obs - obs.mean()
 
+    def _field_dependent_map(
+        self,
+        fields: torch.Tensor,
+        coefficients: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply a local periodic map and return its exact log determinant.
+
+        The learned channels are spatial coefficient fields ``(a, b, c)``
+        defining ``F_x(theta) = a_x + b_x sin(theta_x) + c_x cos(theta_x)``.
+        Thus ``dF_x/dtheta_y`` is diagonal, with diagonal entries
+        ``b_x cos(theta_x) - c_x sin(theta_x)``.  The complex Jacobian is
+        ``I + i dF/dtheta`` and its log determinant can be summed over sites
+        without constructing a lattice-sized dense matrix.
+        """
+        expected_shape = (*self.latsize, 3)
+        if tuple(coefficients.shape) != expected_shape:
+            raise ValueError(
+                "field-dependent coefficients must have shape "
+                f"{expected_shape}, got {tuple(coefficients.shape)}"
+            )
+        a, b, c = coefficients.unbind(dim=-1)
+        deformation = a + b * torch.sin(fields) + c * torch.cos(fields)
+        derivative = b * torch.cos(fields) - c * torch.sin(fields)
+        lattice_axes = tuple(range(1, fields.ndim))
+        log_magnitude = 0.5 * torch.log1p(derivative.square()).sum(
+            dim=lattice_axes
+        )
+        phase = torch.atan(derivative).sum(dim=lattice_axes)
+        log_det_jacobian = torch.complex(log_magnitude, phase)
+        return deformation, log_det_jacobian
+
     def __call__(
         self,
         model: Any,
@@ -288,13 +319,32 @@ class XYOnePtFn:
         if deform:
             S_undef = self.action(fields)
 
-            fields = fields + 1j * alphas[..., 0]
+            if alphas is None:
+                raise ValueError("alphas are required for a deformed observable")
+            if alphas.shape[-1] == 1:
+                deformation = alphas[..., 0]
+                log_det_jacobian = torch.zeros_like(
+                    S_undef, dtype=torch.complex64
+                )
+            elif alphas.shape[-1] == 3:
+                deformation, log_det_jacobian = self._field_dependent_map(
+                    fields, alphas
+                )
+            else:
+                raise ValueError(
+                    "XY deformation fields must have one channel (fixed) "
+                    "or three channels (field-dependent)"
+                )
+
+            fields = fields + 1j * deformation
             S_def = self.action(fields)
             Sdiff = S_def - S_undef
 
             if get_Sdiff:
                 return Sdiff
-            return self.observable(fields) * torch.exp(-Sdiff)
+            return self.observable(fields) * torch.exp(
+                -Sdiff + log_det_jacobian
+            )
         else:
             return self.observable(fields)
 

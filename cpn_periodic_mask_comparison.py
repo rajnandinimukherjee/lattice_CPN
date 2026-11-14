@@ -1,12 +1,13 @@
 """Compare masked and unmasked CP(2) one-point-function deformations.
 
-The masked field is loaded from the matching CP(N) variance-training artifact
-created by ``cpn_OPF_analysis.py`` when available. Otherwise, both masked and
-unmasked fields are trained here.
+The masked result is stored separately from the standard CP(N) variance
+artifacts because this locality comparison trains its deformation from a
+fresh near-zero U-Net initialization. The unmasked baseline is loaded from its
+comparison artifact when available.
 
 Run, for example:
 
-    python cpn_periodic_mask_comparison.py --epochs 200 --mask-radius 6
+    python cpn_periodic_mask_comparison.py --mask-radius 6
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from plot_settings import fig_width_pt, inches_per_pt, latex_font_params
 from actions import CPnGaugeAction
 from cpn_opf.loading import load_ensemble
 from cpn_opf.objectives import init_variance_network
-from cpn_opf.persistence import load_deformation_field, training_savename
+from cpn_opf.persistence import load_deformation_field
 from cpn_opf.training import (
     make_deformation_mask,
     make_model,
@@ -53,6 +54,9 @@ SOURCE = (0, 0)
 COLOR_INDICES = (0, 1)
 DEFAULT_ENSEMBLE = Path("data/cp2_gauge_dim2_b3.30_L64_ens.npy")
 DEFAULT_OUTPUT = Path("paper/figs/fig1_locality_cpn.pdf")
+COMPARISON_DATA_DIRECTORY = Path(
+    "training_data/locality_comparison_near_zero"
+)
 MASKED_LABEL = "masked"
 UNMASKED_LABEL = "not masked"
 
@@ -93,17 +97,33 @@ def beta_from_filename(ensemble: Path) -> float:
     return beta
 
 
-def load_masked_case(
+def masked_comparison_savename(beta: float) -> Path:
+    """Keep the near-zero masked result outside standard CP(N) artifacts."""
+    return COMPARISON_DATA_DIRECTORY / (
+        f"cp{N}_dim{NDIM}_b{beta:g}_L{LATTICE_SIZE}_"
+        f"i{COLOR_INDICES[0]}_j{COLOR_INDICES[1]}_"
+        "masked_nearzero_outscale10_lr3e-3_bs256_seed1234_1000ep_training.npy"
+    )
+
+
+def unmasked_comparison_savename(beta: float) -> Path:
+    """Keep the selected unmasked baseline in the comparison data folder."""
+    return COMPARISON_DATA_DIRECTORY / (
+        f"cp{N}_dim{NDIM}_b{beta:g}_L{LATTICE_SIZE}_"
+        f"i{COLOR_INDICES[0]}_j{COLOR_INDICES[1]}_"
+        "unmasked_baseline_source_1000ep_training.npy"
+    )
+
+
+def load_comparison_case(
     artifact: Path,
     *,
     beta: float,
-) -> tuple[torch.Tensor, float]:
-    """Load and validate the masked variance-training result from CP(N) OPF."""
+) -> tuple[torch.Tensor, float, dict]:
+    """Load and validate one CP(N) variance-training result."""
     if not artifact.exists():
         raise FileNotFoundError(
-            "no masked CP(N) variance-training artifact at "
-            f"{artifact}; run cpn_OPF_analysis.py first or provide "
-            "--masked-training-artifact"
+            f"no CP(N) variance-training artifact at {artifact}"
         )
     saved = np.load(artifact, allow_pickle=True)
     if saved.shape != () or not isinstance(saved.item(), dict):
@@ -140,7 +160,24 @@ def load_masked_case(
         raise ValueError(f"no variance ratio stored in {artifact}") from error
     if not math.isfinite(variance_ratio):
         raise ValueError(f"non-finite variance ratio in {artifact}")
-    return torch.as_tensor(field, dtype=torch.float32), variance_ratio
+    return torch.as_tensor(field, dtype=torch.float32), variance_ratio, metadata
+
+
+def load_masked_case(
+    artifact: Path,
+    *,
+    beta: float,
+) -> tuple[torch.Tensor, float]:
+    """Load and validate a saved masked comparison result."""
+    field, variance_ratio, metadata = load_comparison_case(
+        artifact, beta=beta
+    )
+    if (
+        "periodic_box_mask" in metadata
+        and metadata["periodic_box_mask"] is not True
+    ):
+        raise ValueError(f"{artifact} is not a saved masked comparison")
+    return field, variance_ratio
 
 
 def load_unmasked_case(
@@ -149,13 +186,10 @@ def load_unmasked_case(
     beta: float,
 ) -> tuple[torch.Tensor, float]:
     """Load a previously saved unmasked comparison result."""
-    saved = np.load(artifact, allow_pickle=True)
-    if saved.shape != () or not isinstance(saved.item(), dict):
-        raise ValueError(f"invalid unmasked training artifact: {artifact}")
-    metadata = saved.item().get("metadata", {})
+    _field, _ratio, metadata = load_comparison_case(artifact, beta=beta)
     if metadata.get("periodic_box_mask") is not False:
         raise ValueError(f"{artifact} is not a saved unmasked comparison")
-    return load_masked_case(artifact, beta=beta)
+    return _field, _ratio
 
 
 def normalize_training_curve(
@@ -174,6 +208,46 @@ def normalize_training_curve(
     if not finite.any() or np.any(curve[finite] < 0):
         raise ValueError(f"{label} has no usable variance-training history")
     return curve / initial_variance
+
+
+def minimum_training_epoch(values: np.ndarray) -> int:
+    """Return the epoch with the lowest finite training variance."""
+    curve = np.asarray(values, dtype=float)
+    if curve.ndim != 1:
+        raise ValueError("training variance must be one-dimensional")
+    finite_epochs = np.flatnonzero(np.isfinite(curve))
+    if finite_epochs.size == 0:
+        raise ValueError("training history has no finite variance values")
+    return int(finite_epochs[np.argmin(curve[finite_epochs])])
+
+
+def load_training_minimum_field(
+    artifact: Path,
+    *,
+    smooth_window: int | None = None,
+) -> tuple[torch.Tensor, int, float]:
+    """Load the field at the raw or smoothed training-history minimum."""
+    saved = np.load(artifact, allow_pickle=True)
+    if saved.shape != () or not isinstance(saved.item(), dict):
+        raise ValueError(f"invalid training artifact: {artifact}")
+    data = saved.item()
+    if "train_var" not in data or "initial_var" not in data:
+        raise ValueError(f"no variance-training history stored in {artifact}")
+    train_variance = np.asarray(data["train_var"], dtype=float)
+    selection_history = (
+        train_variance
+        if smooth_window is None
+        else moving_median(train_variance, window=smooth_window)
+    )
+    epoch = minimum_training_epoch(selection_history)
+    alphas = data.get("alphas")
+    if alphas is None or len(alphas) != len(data["train_var"]):
+        raise ValueError(f"no per-epoch deformation fields stored in {artifact}")
+    initial_variance = float(data["initial_var"])
+    if not math.isfinite(initial_variance) or initial_variance <= 0:
+        raise ValueError(f"invalid initial variance stored in {artifact}")
+    train_ratio = float(data["train_var"][epoch]) / initial_variance
+    return torch.as_tensor(alphas[epoch], dtype=torch.float32), epoch, train_ratio
 
 
 def load_training_curve(artifact: Path) -> np.ndarray:
@@ -249,6 +323,11 @@ def train_case(
         hd=args.unet_hidden_dim,
     ).to(device)
     init_variance_network(network)
+    if args.initial_output_scale != 1.0:
+        with torch.no_grad():
+            network.output.weight.mul_(args.initial_output_scale)
+            if network.output.bias is not None:
+                network.output.bias.mul_(args.initial_output_scale)
     mask = (
         make_deformation_mask(
             latsize,
@@ -283,7 +362,12 @@ def train_case(
         lr_cooldown=args.lr_cooldown,
         min_lr=args.min_learning_rate,
     )
-    best_field = trainer.best_alphas().detach()
+    training_minimum_epoch = minimum_training_epoch(
+        np.asarray(trainer.train_var, dtype=float)
+    )
+    # alpha_record and train_var are recorded from the same pre-update field.
+    best_field = trainer.alpha_record[training_minimum_epoch].detach()
+    trainer.training_minimum_epoch = training_minimum_epoch
     variance_ratio = float(
         (loss(alphas=best_field, sampletype="all") / loss.initial_var)
         .detach()
@@ -292,15 +376,22 @@ def train_case(
     return trainer, best_field, variance_ratio
 
 
-def save_unmasked_case(
+def save_comparison_case(
     artifact: Path,
     trainer: Trainer,
     field: torch.Tensor,
     variance_ratio: float,
     *,
     beta: float,
+    use_periodic_box_mask: bool,
+    mask_radius: int,
+    rng_seed: int,
+    initial_output_scale: float = 1.0,
+    selected_epoch: int | None = None,
+    training_variance_ratio: float | None = None,
+    selection_metric: str = "minimum_training_variance",
 ) -> None:
-    """Persist the full unmasked training result for later reuse."""
+    """Persist one comparison run with explicit initialization provenance."""
     save_training_result(
         artifact,
         trainer,
@@ -315,10 +406,87 @@ def save_unmasked_case(
         learned_field=field,
         variance_ratio=variance_ratio,
         loss_function="variance",
+        extra_metadata={
+            "comparison_study": "masked_vs_unmasked",
+            "periodic_box_mask": bool(use_periodic_box_mask),
+            "periodic_box_mask_radius": int(mask_radius),
+            "field_initialization": "near_zero_random",
+            "field_initialization_method": "init_variance_network",
+            "initial_output_scale": float(initial_output_scale),
+            "approx2_reference_field": False,
+            "initialization_rng_seed": int(rng_seed),
+            "selection_metric": selection_metric,
+            "selected_epoch": selected_epoch,
+            "selected_training_variance_ratio": training_variance_ratio,
+        },
     )
-    saved = np.load(artifact, allow_pickle=True).item()
-    saved["metadata"]["periodic_box_mask"] = False
-    np.save(artifact, saved, allow_pickle=True)
+
+
+def evaluate_variance_ratio(
+    fields: torch.Tensor,
+    links: torch.Tensor,
+    split_mask: torch.Tensor,
+    learned_field: torch.Tensor,
+    *,
+    beta: float,
+    device: torch.device,
+) -> float:
+    """Evaluate one selected deformation against the full ensemble variance."""
+    latsize = tuple(int(length) for length in fields.shape[1:-1])
+    model = make_model(
+        fields,
+        links,
+        n=N,
+        action_type="gauge",
+        split_mask=split_mask,
+        device=device,
+    )
+    action = CPnGaugeAction(beta, N, latsize, device=device)
+    observable = CPnOnePtFn(
+        N,
+        latsize,
+        i=COLOR_INDICES[0],
+        j=COLOR_INDICES[1],
+        source=SOURCE,
+        action=action,
+        device=device,
+    )
+    loss = VarianceLoss(model, observable)
+    with torch.no_grad():
+        ratio = loss(
+            alphas=learned_field.to(device), sampletype="all"
+        ) / loss.initial_var
+    return float(ratio.detach().cpu())
+
+
+def save_selected_comparison_case(
+    artifact: Path,
+    learned_field: torch.Tensor,
+    variance_ratio: float,
+    *,
+    selected_epoch: int,
+    training_variance_ratio: float,
+    selection_metric: str,
+) -> None:
+    """Update a saved run with its minimum-training-variance field."""
+    saved = np.load(artifact, allow_pickle=True)
+    if saved.shape != () or not isinstance(saved.item(), dict):
+        raise ValueError(f"invalid training artifact: {artifact}")
+    data = saved.item()
+    field = learned_field.detach().cpu().numpy()
+    data["learned_field"] = field
+    alpha_scale = float(data.get("alpha_scale", 1.0))
+    data["scaled_field"] = alpha_scale * field
+    data["variance_ratio"] = float(variance_ratio)
+    metadata = data.setdefault("metadata", {})
+    metadata.update(
+        field_at_source=float(field[*SOURCE, COLOR_INDICES[0]]),
+        field_norm_at_source=float(np.linalg.norm(field[*SOURCE])),
+        selection_metric=selection_metric,
+        selected_epoch=int(selected_epoch),
+        selected_training_variance_ratio=float(training_variance_ratio),
+    )
+    np.save(artifact, data, allow_pickle=True)
 
 
 def plot_comparison(
@@ -326,6 +494,7 @@ def plot_comparison(
     training_curves: dict[str, np.ndarray],
     beta: float,
     output: Path,
+    cutoff_epochs: dict[str, int],
 ) -> None:
     """Render separate masked and unmasked panels for the manuscript."""
     arrays = {name: field.detach().cpu().numpy()
@@ -347,28 +516,16 @@ def plot_comparison(
             "ps.fonttype": 42,
         }
     )
-    epoch_count = min(len(curve) for curve in training_curves.values())
-    if epoch_count < 1:
+    if any(len(curve) < 1 for curve in training_curves.values()):
         raise ValueError("training histories must contain at least one epoch")
     plotted_curves = {
-        label: moving_median(np.asarray(curve[:epoch_count], dtype=float))
+        label: moving_median(np.asarray(curve, dtype=float))
         for label, curve in training_curves.items()
     }
-    unmasked_curve = plotted_curves.get(UNMASKED_LABEL)
-    if unmasked_curve is not None:
-        finite_epochs = np.flatnonzero(
-            np.isfinite(unmasked_curve) & (unmasked_curve > 0)
-        )
-        if finite_epochs.size == 0:
-            raise ValueError("unmasked history has no positive finite values")
-        minimum_epoch = int(
-            finite_epochs[np.argmin(unmasked_curve[finite_epochs])]
-        )
-        unmasked_curve[minimum_epoch + 1 :] = np.nan
-        print(
-            "Truncated the unmasked training curve at its minimum moving "
-            f"median (epoch {minimum_epoch})"
-        )
+    plotted_curves = {
+        label: curve[: cutoff_epochs[label] + 1]
+        for label, curve in plotted_curves.items()
+    }
     finite_positive = np.concatenate(
         [curve[np.isfinite(curve) & (curve > 0)] for curve in plotted_curves.values()]
     )
@@ -409,15 +566,16 @@ def plot_comparison(
 
         training_axis = fig.add_subplot(grid[0, 0])
         training_axis.set_box_aspect(1)
+        curve = plotted_curves[label]
         training_axis.plot(
-            np.arange(epoch_count),
-            plotted_curves[label],
+            np.arange(len(curve)),
+            curve,
             color="C0",
             linewidth=1.1,
         )
         training_axis.set_yscale("log")
         training_axis.set_ylim(curve_ymin, curve_ymax)
-        training_axis.set_xlim(0, epoch_count - 1)
+        training_axis.set_xlim(0, max(1, len(curve) - 1))
         panel_label = "(a)" if label == UNMASKED_LABEL else "(b)"
         panel_title = training_axis.set_title(
             rf"\textbf{{{panel_label} {label}}}"
@@ -459,8 +617,8 @@ def plot_comparison(
 
         if label == UNMASKED_LABEL:
             suptitle = fig.suptitle(
-                rf"$\mathbb{{CP}}^{{{N}}}$ gauge action, $d={NDIM}$, "
-                rf"$L={LATTICE_SIZE}$, $\beta={beta:g}$",
+                rf"$\mathbb{{CP}}^{{{N}}}$ gauge action, "
+                rf"${LATTICE_SIZE}^{{{NDIM}}}$, $\beta={beta:g}$",
                 y=0.96,
             )
             suptitle.set_usetex(True)
@@ -505,7 +663,7 @@ def parse_args() -> argparse.Namespace:
         "--masked-training-artifact",
         type=Path,
         default=None,
-        help="saved masked variance result from cpn_OPF_analysis.py",
+        help="comparison-specific masked result to load or create",
     )
     parser.add_argument(
         "--unmasked-training-artifact",
@@ -513,9 +671,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="saved unmasked comparison result to load or create",
     )
-    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument(
+        "--initial-output-scale",
+        type=float,
+        default=1.0,
+        help="scale only the near-zero U-Net output-layer initialization",
+    )
     parser.add_argument(
         "--lr-scheduler",
         choices=("constant", "cosine", "plateau"),
@@ -556,6 +720,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("--epochs must be positive and --batch-size at least 2")
     if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
         parser.error("--learning-rate must be positive and finite")
+    if (
+        not math.isfinite(args.initial_output_scale)
+        or args.initial_output_scale <= 0
+    ):
+        parser.error("--initial-output-scale must be positive and finite")
     if not math.isfinite(args.min_learning_rate) or args.min_learning_rate < 0:
         parser.error("--min-learning-rate must be non-negative and finite")
     if args.lr_scheduler != "constant" and args.min_learning_rate > args.learning_rate:
@@ -594,138 +763,161 @@ def main() -> None:
     if not args.ensemble.exists():
         raise FileNotFoundError(args.ensemble)
     beta = beta_from_filename(args.ensemble)
-    masked_artifact = args.masked_training_artifact or training_savename(
-        N,
-        NDIM,
-        beta,
-        LATTICE_SIZE,
-        COLOR_INDICES[0],
-        COLOR_INDICES[1],
-        loss_function="variance",
-        action_type="gauge",
+    masked_artifact = (
+        args.masked_training_artifact or masked_comparison_savename(beta)
     )
-    unmasked_artifact = args.unmasked_training_artifact or training_savename(
-        N,
-        NDIM,
-        beta,
-        LATTICE_SIZE,
-        COLOR_INDICES[0],
-        COLOR_INDICES[1],
-        loss_function="variance-unmasked",
-        action_type="gauge",
+    unmasked_artifact = (
+        args.unmasked_training_artifact or unmasked_comparison_savename(beta)
     )
     print(f"Using beta={beta:g}, parsed from {args.ensemble.name}")
-    masked_result: tuple[torch.Tensor, float] | None = None
-    if masked_artifact.exists():
+    cases = {
+        MASKED_LABEL: {
+            "artifact": masked_artifact,
+            "use_mask": True,
+            "selection_metric": "minimum_training_variance",
+            "smooth_window": None,
+            "loaded": None,
+        },
+        UNMASKED_LABEL: {
+            "artifact": unmasked_artifact,
+            "use_mask": False,
+            "selection_metric": "minimum_25_epoch_rolling_median_training_variance",
+            "smooth_window": 25,
+            "loaded": None,
+        },
+    }
+    for label, case in cases.items():
+        artifact = case["artifact"]
+        if not artifact.exists():
+            print(f"No {label} result at {artifact}; training it")
+            continue
         try:
-            masked_result = load_masked_case(masked_artifact, beta=beta)
-            print(f"Loaded masked field from {masked_artifact}")
-        except ValueError as error:
-            print(
-                "Saved masked result is incompatible; retraining it "
-                f"({error})"
+            if case["use_mask"]:
+                load_masked_case(artifact, beta=beta)
+            else:
+                load_unmasked_case(artifact, beta=beta)
+            field, selected_epoch, training_ratio = load_training_minimum_field(
+                artifact, smooth_window=case["smooth_window"]
             )
-    else:
-        print(f"No masked result at {masked_artifact}; training it")
-
-    unmasked_result: tuple[torch.Tensor, float] | None = None
-    if unmasked_artifact.exists():
-        try:
-            unmasked_result = load_unmasked_case(unmasked_artifact, beta=beta)
-            print(f"Loaded unmasked field from {unmasked_artifact}")
-        except ValueError as error:
+            case["loaded"] = {
+                "field": field,
+                "epoch": selected_epoch,
+                "training_ratio": training_ratio,
+                "curve": load_training_curve(artifact),
+            }
             print(
-                "Saved unmasked result is incompatible; retraining it "
-                f"({error})"
+                f"Loaded {label} result from {artifact}; selected training "
+                f"minimum at epoch {selected_epoch}"
             )
-    else:
-        print(f"No unmasked result at {unmasked_artifact}; training it")
+        except ValueError as error:
+            print(f"Saved {label} result is incompatible; retraining it ({error})")
 
-    fields: torch.Tensor | None = None
-    links: torch.Tensor | None = None
-    split_mask: torch.Tensor | None = None
-    device: torch.device | None = None
-    if masked_result is None or unmasked_result is None:
-        device = resolve_device(args.device)
-        set_seed(args.seed)
-        fields, links, _ = load_ensemble(
-            args.ensemble,
-            n=N,
-            ndim=NDIM,
-            lattice_size=LATTICE_SIZE,
-            beta=beta,
-            action_type="gauge",
-            i=COLOR_INDICES[0],
-            j=COLOR_INDICES[1],
-            decorrelation_factor=args.decorrelation,
-        )
-        if links is None:
-            raise RuntimeError(
-                "the gauge-action comparison requires gauge links")
-        fields, links = fields.to(device), links.to(device)
-        split_mask = make_split_mask(fields)
+    device = resolve_device(args.device)
+    set_seed(args.seed)
+    fields, links, _ = load_ensemble(
+        args.ensemble,
+        n=N,
+        ndim=NDIM,
+        lattice_size=LATTICE_SIZE,
+        beta=beta,
+        action_type="gauge",
+        i=COLOR_INDICES[0],
+        j=COLOR_INDICES[1],
+        decorrelation_factor=args.decorrelation,
+    )
+    if links is None:
+        raise RuntimeError("the gauge-action comparison requires gauge links")
+    fields, links = fields.to(device), links.to(device)
+    split_mask = make_split_mask(fields)
 
-    masked_label = MASKED_LABEL
-    unmasked_label = UNMASKED_LABEL
     results: dict[str, torch.Tensor] = {}
     ratios: dict[str, float] = {}
     training_curves: dict[str, np.ndarray] = {}
-    if masked_result is None:
-        print(f"\nTraining {masked_label} ...")
-        assert fields is not None and links is not None and split_mask is not None
-        assert device is not None
-        trainer, results[masked_label], ratios[masked_label] = train_case(
-            fields,
-            links,
-            split_mask,
-            beta=beta,
-            use_periodic_box_mask=True,
-            args=args,
-            device=device,
-        )
-        training_curves[masked_label] = normalize_training_curve(
-            np.asarray(trainer.train_var),
-            float(trainer.loss_fn.initial_var),
-            label=masked_label,
-        )
-    else:
-        results[masked_label], ratios[masked_label] = masked_result
-        training_curves[masked_label] = load_training_curve(masked_artifact)
-    if unmasked_result is None:
-        print(f"\nTraining {unmasked_label} ...")
-        assert fields is not None and links is not None and split_mask is not None
-        assert device is not None
-        trainer, field, variance_ratio = train_case(
-            fields,
-            links,
-            split_mask,
-            beta=beta,
-            use_periodic_box_mask=False,
-            args=args,
-            device=device,
-        )
-        save_unmasked_case(
-            unmasked_artifact,
-            trainer,
-            field,
-            variance_ratio,
-            beta=beta,
-        )
-        training_curves[unmasked_label] = normalize_training_curve(
-            np.asarray(trainer.train_var),
-            float(trainer.loss_fn.initial_var),
-            label=unmasked_label,
-        )
-        results[unmasked_label] = field
-        ratios[unmasked_label] = variance_ratio
-        print(f"Saved unmasked field to {unmasked_artifact}")
-    else:
-        results[unmasked_label], ratios[unmasked_label] = unmasked_result
-        training_curves[unmasked_label] = load_training_curve(unmasked_artifact)
-    print(f"{masked_label}: Var[Q]/Var[O] = {ratios[masked_label]:.6g}")
-    print(f"{unmasked_label}: Var[Q]/Var[O] = {ratios[unmasked_label]:.6g}")
+    for label, case in cases.items():
+        artifact = case["artifact"]
+        use_mask = case["use_mask"]
+        loaded = case["loaded"]
+        if loaded is None:
+            print(f"\nTraining {label} ...")
+            trainer, field, _ = train_case(
+                fields,
+                links,
+                split_mask,
+                beta=beta,
+                use_periodic_box_mask=use_mask,
+                args=args,
+                device=device,
+            )
+            if use_mask:
+                selected_epoch = int(trainer.training_minimum_epoch)
+            else:
+                selected_epoch = minimum_training_epoch(
+                    moving_median(np.asarray(trainer.train_var, dtype=float))
+                )
+            field = trainer.alpha_record[selected_epoch].detach()
+            training_ratio = float(
+                trainer.train_var[selected_epoch]
+                / trainer.loss_fn.initial_var
+            )
+            curve = normalize_training_curve(
+                np.asarray(trainer.train_var),
+                float(trainer.loss_fn.initial_var),
+                label=label,
+            )
+        else:
+            field = loaded["field"]
+            selected_epoch = loaded["epoch"]
+            training_ratio = loaded["training_ratio"]
+            curve = loaded["curve"]
 
-    plot_comparison(results, training_curves, beta, args.output)
+        ratio = evaluate_variance_ratio(
+            fields,
+            links,
+            split_mask,
+            field,
+            beta=beta,
+            device=device,
+        )
+        if loaded is None:
+            save_comparison_case(
+                artifact,
+                trainer,
+                field,
+                ratio,
+                beta=beta,
+                use_periodic_box_mask=use_mask,
+                mask_radius=args.mask_radius,
+                rng_seed=args.seed,
+                initial_output_scale=args.initial_output_scale,
+                selected_epoch=selected_epoch,
+                training_variance_ratio=training_ratio,
+                selection_metric=case["selection_metric"],
+            )
+        else:
+            save_selected_comparison_case(
+                artifact,
+                field,
+                ratio,
+                selected_epoch=selected_epoch,
+                training_variance_ratio=training_ratio,
+                selection_metric=case["selection_metric"],
+            )
+        print(
+            f"{label}: selected epoch {selected_epoch}, training variance "
+            f"ratio {training_ratio:.6g}, full-sample ratio {ratio:.6g}"
+        )
+        results[label] = field
+        ratios[label] = ratio
+        training_curves[label] = curve
+        case["selected_epoch"] = selected_epoch
+
+    plot_comparison(
+        results,
+        training_curves,
+        beta,
+        args.output,
+        {label: case["selected_epoch"] for label, case in cases.items()},
+    )
 
 
 if __name__ == "__main__":

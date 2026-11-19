@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import FixedLocator, FormatStrFormatter, MaxNLocator, NullFormatter
 from matplotlib.transforms import blended_transform_factory
 import numpy as np
 
@@ -40,6 +40,8 @@ FIGURES_DIRECTORY = Path("paper/figs")
 APPROX3_COLOR = "tab:red"
 APPROX3_MARKER = "D"
 APPROX3_LABEL = "Approx. 3 (smooth deformation)"
+EXTRA_RADIUS_MARKER_SIZE = 2.5
+CHOSEN_RADIUS_MARKER_AREA = 14
 
 # Companion mask-radius scan (the ``xy_mask_radius_scaling`` figure): the
 # periodic support radius was varied at fixed Approximation 3, repeated over
@@ -217,11 +219,8 @@ def _plot_row(
     it in faded browns, with a per-column legend listing every radius
     (including the dimension's own series, labelled via
     ``main_radius_by_dim``, which always keeps the plain ``APPROX3_COLOR``).
-    The row's shared y-axis is then given extra headroom above every data
-    point, so the upper-left legend sits in blank space rather than over a
-    curve.
+    Each logarithmic y-axis spans its own data, with room for the legend.
     """
-    row_maximum = 0.0
     for column, (dim, lattice_size, betas, ratios) in enumerate(
         zip(dims, lattice_sizes, betas_by_dim, ratios_by_dim)
     ):
@@ -234,7 +233,9 @@ def _plot_row(
         betas = betas[order]
         ratios = ratios[order]
         temperatures = 1.0 / betas
-        row_maximum = max(row_maximum, float(np.max(ratios)))
+        if np.any(ratios <= 0.0):
+            raise ValueError("variance ratios must be positive for a log scale")
+        axis_minimum = float(np.min(ratios))
 
         axis.plot(
             temperatures,
@@ -248,7 +249,7 @@ def _plot_row(
             ratios,
             color=APPROX3_COLOR,
             marker=APPROX3_MARKER,
-            s=14,
+            s=CHOSEN_RADIUS_MARKER_AREA,
             linewidths=0.6,
             edgecolors="white",
             zorder=3,
@@ -285,18 +286,22 @@ def _plot_row(
 
         for radius, extra_temperatures, extra_ratios in extra:
             color = color_by_radius[radius]
-            row_maximum = max(row_maximum, float(np.max(extra_ratios)))
-            # Line only, no markers: these are the non-chosen radii, kept
-            # visually subordinate to the dimension's own Approximation 3
-            # series (which keeps its marker).
+            if np.any(extra_ratios <= 0.0):
+                raise ValueError("variance ratios must be positive for a log scale")
+            axis_minimum = min(axis_minimum, float(np.min(extra_ratios)))
+            # Tiny circles identify the non-chosen data points while the
+            # larger diamond keeps the chosen radius visually prominent.
             axis.plot(
                 extra_temperatures,
                 extra_ratios,
                 color=color,
                 lw=0.9,
+                marker="o",
+                markersize=EXTRA_RADIUS_MARKER_SIZE,
+                markeredgewidth=0.0,
                 zorder=2,
             )
-            legend_entries.append((radius, color, None))
+            legend_entries.append((radius, color, "o"))
 
         # Sort by radius so the legend reads in increasing order regardless
         # of where the dimension's own Approximation 3 radius falls.
@@ -305,8 +310,8 @@ def _plot_row(
                 [],
                 [],
                 color=color,
-                marker=marker if marker is not None else "None",
-                markersize=3.2,
+                marker=marker,
+                markersize=3.2 if radius == main_radius else EXTRA_RADIUS_MARKER_SIZE,
                 markeredgewidth=0.0,
                 linewidth=1.0,
                 label=rf"$R={radius}$",
@@ -315,26 +320,41 @@ def _plot_row(
         ]
 
         axis.axhline(1.0, color="black", lw=0.8, zorder=1)
+        axis.set_yscale("log")
+        axis.set_ylim(bottom=axis_minimum / 1.5, top=1.2)
+        axis.yaxis.set_minor_formatter(NullFormatter())
+        if axis_minimum > 0.01:
+            ticks = [
+                tick
+                for tick in (0.1, 0.2, 0.5, 1.0)
+                if axis.get_ylim()[0] < tick < axis.get_ylim()[1]
+            ]
+            axis.yaxis.set_major_locator(FixedLocator(ticks))
+            axis.yaxis.set_major_formatter(FormatStrFormatter("%g"))
         axis.set_title(rf"$d={dim},\ L={lattice_size}$", pad=3)
         axis.set_axisbelow(True)
         axis.grid(color="0.8", lw=0.5, alpha=0.5)
-        if column > 0:
-            axis.tick_params(axis="y", left=True, labelleft=False)
         axis.xaxis.set_major_locator(MaxNLocator(nbins=5, prune="both"))
 
         if legend_handles:
-            # Anchor on the right, a little below the y=1 reference line
-            # (in data coordinates, so the gap is the same regardless of how
-            # much headroom a given row's curves need) rather than flush
-            # with the axes top; the curves trend downward left to right,
-            # so the upper right stays clear of the data.
+            if extra and dim == 1:
+                # The lower-left corner stays clear of the 1D XY curves.
+                legend_position = {
+                    "loc": "lower left",
+                    "bbox_to_anchor": (0.02, 0.02),
+                    "bbox_transform": axis.transAxes,
+                }
+            else:
+                legend_position = {
+                    "loc": "upper right",
+                    "bbox_to_anchor": (1.0, 0.93),
+                    "bbox_transform": blended_transform_factory(
+                        axis.transAxes, axis.transData
+                    ),
+                }
             axis.legend(
                 handles=legend_handles,
-                loc="upper right",
-                bbox_to_anchor=(1.0, 0.93),
-                bbox_transform=blended_transform_factory(
-                    axis.transAxes, axis.transData
-                ),
+                **legend_position,
                 ncols=2,
                 frameon=False,
                 fontsize=6.5,
@@ -378,11 +398,6 @@ def _plot_row(
             )
             critical_axis.tick_params(axis="x", pad=1, labelsize=6)
 
-    # Reserve headroom above every curve in the row for the per-column
-    # legends; sharey="row" makes this one call apply to every column.
-    if extra_series_by_dim is not None or main_radius_by_dim is not None:
-        axes_row[0].set_ylim(bottom=0.0, top=row_maximum * 1.55)
-
 
 def _make_panel(
     dims: list[int],
@@ -399,7 +414,7 @@ def _make_panel(
         nrows=1,
         ncols=len(dims),
         sharex="col",
-        sharey="row",
+        sharey=False,
         squeeze=False,
         figsize=(fig_width, 0.36 * fig_width),
     )
@@ -419,7 +434,7 @@ def _make_panel(
     fig.supxlabel(r"$T=\beta^{-1}$")
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.90), w_pad=0.0, h_pad=0.0)
-    fig.subplots_adjust(wspace=0.025, bottom=0.26, top=0.78)
+    fig.subplots_adjust(wspace=0.26, bottom=0.26, top=0.78)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, bbox_inches="tight")

@@ -20,6 +20,7 @@ import re
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import torch
 import torch.optim as optim
@@ -495,6 +496,8 @@ def plot_comparison(
     beta: float,
     output: Path,
     cutoff_epochs: dict[str, int],
+    *,
+    mask_radius: int = 6,
 ) -> None:
     """Render separate masked and unmasked panels for the manuscript."""
     arrays = {name: field.detach().cpu().numpy()
@@ -590,6 +593,8 @@ def plot_comparison(
 
         field_axes = []
         image = None
+        half = LATTICE_SIZE // 2
+        extent = (-half - 0.5, LATTICE_SIZE - half - 0.5) * 2
         for channel in range(N + 1):
             column = channel + 2
             if channel == 0:
@@ -602,15 +607,34 @@ def plot_comparison(
                 )
             axis.set_box_aspect(1)
             field_axes.append(axis)
+            centered_field = np.roll(
+                field[..., channel], shift=(half, half), axis=(0, 1)
+            )
             image = axis.imshow(
-                field[..., channel],
+                centered_field,
                 origin="lower",
-                cmap="coolwarm",
+                cmap="bwr",
                 vmin=-limits[label],
                 vmax=limits[label],
+                extent=extent,
             )
             axis.set_title(rf"$F_{{x,{channel}}}$", pad=3)
             axis.set_xlabel(r"$x_0$")
+            axis.set_xticks([-20, 0, 20])
+            axis.set_yticks([-20, 0, 20])
+            if label == MASKED_LABEL:
+                axis.add_patch(
+                    Rectangle(
+                        (-mask_radius, -mask_radius),
+                        2 * mask_radius,
+                        2 * mask_radius,
+                        fill=False,
+                        edgecolor="black",
+                        linestyle="--",
+                        linewidth=1.0,
+                        zorder=3,
+                    )
+                )
             if channel == 0:
                 axis.set_ylabel(r"$x_1$")
             axis.tick_params(labelleft=(channel == 0))
@@ -917,6 +941,7 @@ def main() -> None:
         beta,
         args.output,
         {label: case["selected_epoch"] for label, case in cases.items()},
+        mask_radius=args.mask_radius,
     )
 
 

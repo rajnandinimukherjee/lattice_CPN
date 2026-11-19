@@ -284,7 +284,7 @@ def make_figure(summaries: list[dict[str, object]]) -> plt.Figure:
         1,
         len(panels),
         figsize=(fig_width, 0.32 * fig_width),
-        gridspec_kw={"wspace": 0.28},
+        gridspec_kw={"wspace": 0.22},
     )
     for axis, data in zip(axes, panels):
         plot_panel(axis, data)
@@ -295,7 +295,7 @@ def make_figure(summaries: list[dict[str, object]]) -> plt.Figure:
         x=0.01,
     )
     figure.subplots_adjust(
-        left=0.095, right=0.995, bottom=0.21, top=0.88, wspace=0.28
+        left=0.095, right=0.998, bottom=0.21, top=0.88, wspace=0.22
     )
     return figure
 

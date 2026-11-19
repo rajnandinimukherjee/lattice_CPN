@@ -79,12 +79,12 @@ def theoretical_ratio(ndim: int, beta: float, radii: np.ndarray) -> np.ndarray:
 plt.rcParams.update(latex_font_params)
 plt.rcParams.update(
     {
-        "font.size": 11,
-        "axes.labelsize": 11,
-        "axes.titlesize": 11,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 10,
+        "font.size": 9,
+        "axes.labelsize": 9,
+        "axes.titlesize": 9,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 9,
         "axes.linewidth": 0.8,
         "lines.linewidth": 1.0,
         "pdf.fonttype": 42,
@@ -291,7 +291,7 @@ def make_figure(summaries: list[dict[str, object]]) -> plt.Figure:
 
     figure.supylabel(
         r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$",
-        fontsize=11,
+        fontsize=9,
         x=0.01,
     )
     figure.subplots_adjust(

@@ -59,7 +59,6 @@ XY_MASK_RADIUS_EXCLUDE = {1: 4, 2: 8, 3: 1}
 BROWN_COLOR = "saddlebrown"
 BLEND_LIGHT = 0.32
 BLEND_DARK = 0.82
-EXTRA_RADIUS_MARKERS = ("o", "s", "^", "v", "P", "X")
 
 
 def _blend_with_white(
@@ -283,12 +282,12 @@ def _plot_row(
             }
         )
 
-        for index, (radius, extra_temperatures, extra_ratios) in enumerate(
-            extra
-        ):
+        for radius, extra_temperatures, extra_ratios in extra:
             color = color_by_radius[radius]
-            marker = EXTRA_RADIUS_MARKERS[index]
             row_maximum = max(row_maximum, float(np.max(extra_ratios)))
+            # Line only, no markers: these are the non-chosen radii, kept
+            # visually subordinate to the dimension's own Approximation 3
+            # series (which keeps its marker).
             axis.plot(
                 extra_temperatures,
                 extra_ratios,
@@ -296,17 +295,7 @@ def _plot_row(
                 lw=0.9,
                 zorder=2,
             )
-            axis.scatter(
-                extra_temperatures,
-                extra_ratios,
-                color=color,
-                marker=marker,
-                s=14,
-                linewidths=0.6,
-                edgecolors="white",
-                zorder=3,
-            )
-            legend_entries.append((radius, color, marker))
+            legend_entries.append((radius, color, None))
 
         # Sort by radius so the legend reads in increasing order regardless
         # of where the dimension's own Approximation 3 radius falls.
@@ -315,7 +304,7 @@ def _plot_row(
                 [],
                 [],
                 color=color,
-                marker=marker,
+                marker=marker if marker is not None else "None",
                 markersize=3.2,
                 markeredgewidth=0.0,
                 linewidth=1.0,

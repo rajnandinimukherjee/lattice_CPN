@@ -69,6 +69,8 @@ from xy_opf.optimization import fit_lattice_laplace_profile
 from xy_opf.training import make_split_mask
 
 
+# Overwritten from CLI arguments in main(); the values below are the
+# defaults for the original d=2, beta=0.65, L=32 scan.
 NDIM = 2
 BETA = 0.65
 LATTICE_SIZE = 32
@@ -82,12 +84,22 @@ OUTPUT_STEM = "xy_mask_radius"
 
 # The box side is min(2R+1, L), so R=15 is the largest support that is still
 # a proper subset of the 32^2 lattice.  R=6 is the radius used everywhere
-# else in the manuscript.
+# else in the manuscript at d=2,3; d=1 instead publishes R=20 (see
+# xy_opf/README.md).
 DEFAULT_RADII = (0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15)
 # Roughly one restart in three stalls while the source deformation is still
 # growing, independently of the radius, so the scan uses five of them.
 DEFAULT_SEEDS = (1234, 1235, 1236, 1237, 1238)
 PUBLISHED_RADIUS = 6
+
+# Per-dimension defaults used when --radii/--published-radius are not given
+# explicitly, for the d=1 and d=3 scans added alongside the original d=2 one.
+DIMENSION_DEFAULT_RADII = {
+    1: (0, 2, 4, 6, 8, 10, 12, 15, 18, 20, 24, 28, 31),
+    2: DEFAULT_RADII,
+    3: (0, 1, 2, 3, 4, 5, 6, 7),
+}
+DIMENSION_PUBLISHED_RADIUS = {1: 20, 2: 6, 3: 6}
 
 plt.rcParams.update(latex_font_params)
 plt.rcParams.update(
@@ -530,11 +542,39 @@ def parse_args() -> argparse.Namespace:
     """Parse the scan grid and the training controls it varies."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--dim",
+        type=int,
+        choices=(1, 2, 3),
+        default=NDIM,
+        help="spatial dimension of the XY ensemble to scan",
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=None,
+        help=f"inverse temperature of the ensemble (default: {BETA:g} at --dim 2)",
+    )
+    parser.add_argument(
+        "--lattice-size",
+        type=int,
+        default=None,
+        help=f"lattice side length L (default: {LATTICE_SIZE} at --dim 2)",
+    )
+    parser.add_argument(
         "--radii",
         nargs="+",
         type=int,
-        default=list(DEFAULT_RADII),
-        help="periodic support radii to scan",
+        default=None,
+        help=(
+            "periodic support radii to scan (default: a per-dimension grid "
+            "within [0, L/2-1])"
+        ),
+    )
+    parser.add_argument(
+        "--published-radius",
+        type=int,
+        default=None,
+        help="radius used elsewhere in the manuscript (default: per-dimension)",
     )
     parser.add_argument(
         "--seeds",
@@ -607,7 +647,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha-xatol", type=float, default=1e-4)
     args = parser.parse_args()
 
-    limit = maximum_radius(LATTICE_SIZE)
+    dimension_lattice_defaults = {1: 64, 2: LATTICE_SIZE, 3: 16}
+    if args.lattice_size is None:
+        args.lattice_size = dimension_lattice_defaults[args.dim]
+    if args.beta is None:
+        if args.dim != 2:
+            parser.error(f"--beta is required for --dim {args.dim}")
+        args.beta = BETA
+    if args.radii is None:
+        args.radii = list(DIMENSION_DEFAULT_RADII[args.dim])
+    if args.published_radius is None:
+        args.published_radius = DIMENSION_PUBLISHED_RADIUS[args.dim]
+
+    limit = maximum_radius(args.lattice_size)
     if not args.radii:
         parser.error("--radii must contain at least one radius")
     if len(set(args.radii)) != len(args.radii):
@@ -615,9 +667,11 @@ def parse_args() -> argparse.Namespace:
     if any(radius < 0 or radius > limit for radius in args.radii):
         parser.error(
             f"--radii must lie between 0 and {limit}; a radius of "
-            f"{LATTICE_SIZE // 2} covers the whole lattice, where the "
+            f"{args.lattice_size // 2} covers the whole lattice, where the "
             "constant global-orbit mode makes the objective unbounded"
         )
+    if args.published_radius < 0 or args.published_radius > limit:
+        parser.error(f"--published-radius must lie between 0 and {limit}")
     if not args.seeds or len(set(args.seeds)) != len(args.seeds):
         parser.error("--seeds must contain distinct values")
     if args.epochs < 1 or args.batch_size < 2:
@@ -666,6 +720,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Run or load the radius scan, save the results, and plot them."""
     args = parse_args()
+
+    global NDIM, BETA, LATTICE_SIZE, SOURCE, ENSEMBLE, PUBLISHED_RADIUS
+    global OUTPUT_STEM
+    NDIM = args.dim
+    BETA = args.beta
+    LATTICE_SIZE = args.lattice_size
+    SOURCE = (0,) * NDIM
+    ENSEMBLE = Path(f"data/xy_dim{NDIM}_b{BETA:.2f}_L{LATTICE_SIZE}_ens.npy")
+    PUBLISHED_RADIUS = args.published_radius
+    if NDIM == 2 and math.isclose(BETA, 0.65) and LATTICE_SIZE == 32:
+        OUTPUT_STEM = "xy_mask_radius"
+    else:
+        OUTPUT_STEM = f"xy_mask_radius_dim{NDIM}_b{BETA:.2f}_L{LATTICE_SIZE}"
+
     if not ENSEMBLE.exists():
         raise FileNotFoundError(ENSEMBLE)
 

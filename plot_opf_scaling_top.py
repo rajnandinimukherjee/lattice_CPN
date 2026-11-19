@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
+from matplotlib.transforms import blended_transform_factory
 import numpy as np
 
 from plot_settings import fig_width, latex_font_params
@@ -322,13 +323,18 @@ def _plot_row(
         axis.xaxis.set_major_locator(MaxNLocator(nbins=5, prune="both"))
 
         if legend_handles:
-            # Anchor a little below the axes top (rather than flush with it)
-            # so the legend clears the y=1 reference line instead of sitting
-            # on top of it.
+            # Anchor on the right, a little below the y=1 reference line
+            # (in data coordinates, so the gap is the same regardless of how
+            # much headroom a given row's curves need) rather than flush
+            # with the axes top; the curves trend downward left to right,
+            # so the upper right stays clear of the data.
             axis.legend(
                 handles=legend_handles,
-                loc="upper left",
-                bbox_to_anchor=(0.0, 0.90),
+                loc="upper right",
+                bbox_to_anchor=(1.0, 0.93),
+                bbox_transform=blended_transform_factory(
+                    axis.transAxes, axis.transData
+                ),
                 ncols=2,
                 frameon=False,
                 fontsize=6.5,
@@ -374,7 +380,7 @@ def _plot_row(
 
     # Reserve headroom above every curve in the row for the per-column
     # legends; sharey="row" makes this one call apply to every column.
-    if extra_series_by_dim is not None:
+    if extra_series_by_dim is not None or main_radius_by_dim is not None:
         axes_row[0].set_ylim(bottom=0.0, top=row_maximum * 1.55)
 
 
@@ -440,6 +446,10 @@ def main() -> None:
         extra_series_by_dim=xy_extra_series,
         main_radius_by_dim=xy_main_radius,
     )
+    # The mask radius used for every CP(2) dimension's own Approximation 3
+    # series (confirmed from the saved artifacts' metadata).
+    cp2_main_radius = {1: 6, 2: 6, 3: 6}
+
     _make_panel(
         cp2_dims,
         cp2_lattice_sizes,
@@ -447,6 +457,7 @@ def main() -> None:
         cp2_ratios,
         GAUGE_CRITICAL_TEMPERATURES,
         FIGURES_DIRECTORY / "cp2_scaling_top.pdf",
+        main_radius_by_dim=cp2_main_radius,
     )
 
     for path in (

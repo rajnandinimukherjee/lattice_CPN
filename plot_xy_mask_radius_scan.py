@@ -7,7 +7,7 @@ each radius.  This script only loads the three saved scan summaries and
 draws them side by side, sharing a log-scale y-axis so the very different
 radius ranges (set by each ensemble's lattice size) and R-dependence can be
 compared directly: d=1 improves with R without bound (vanishing lattice
-capacity, 2/R), d=2 improves logarithmically, and d=3's capacity saturates.
+capacity, 2/(R+1)), d=2 improves logarithmically, and d=3's capacity saturates.
 Each panel also overlays the closed-form Approximation-3 scaling derived
 from treating it as a free massless lattice scalar sourced at the origin
 and IR-regulated at the mask radius (``theoretical_ratio``).
@@ -57,23 +57,24 @@ G_INFINITY_D3 = 0.2527
 
 
 def theoretical_ratio(ndim: int, beta: float, radii: np.ndarray) -> np.ndarray:
-    """Closed-form Approximation-3 scaling of Var[Q]/Var[O] with R/a.
+    """Closed-form Approximation-3 scaling of Var[Q]/Var[O] with lattice R.
 
     Approximation 3 is a free massless lattice scalar sourced at the origin
-    and forced to vanish on the mask boundary at radius R; its on-shell
+    and forced to vanish outside the periodic box of inclusive radius R; its on-shell
     action E[f](R) is that propagator's IR-regulated value at the source.
     The regulator is linearly IR-divergent in d=1 (exponential suppression
-    in R), logarithmically divergent in d=2 (power law in R/a with the
+    in R), logarithmically divergent in d=2 (power law in R+1 with the
     model's own spin-wave exponent eta=1/(2*pi*beta)), and IR-safe in d=3
-    (a beta-dependent floor approached as (a/R)^{d-2}).
+    (a beta-dependent floor approached as (R+1)^{-(d-2)}).
     """
     radii = np.asarray(radii, dtype=float)
     if ndim == 1:
         return np.exp(-(radii + 1.0) / (2.0 * beta))
+    cutoff = radii + 1.0
     if ndim == 2:
-        return radii ** (-1.0 / (2.0 * np.pi * beta))
+        return cutoff ** (-1.0 / (2.0 * np.pi * beta))
     if ndim == 3:
-        return np.exp(-(G_INFINITY_D3 / beta) * (1.0 - 1.0 / radii))
+        return np.exp(-(G_INFINITY_D3 / beta) * (1.0 - 1.0 / cutoff))
     raise ValueError(f"no closed-form theory curve implemented for d={ndim}")
 
 plt.rcParams.update(latex_font_params)
@@ -144,7 +145,7 @@ def save_legend(output_path: Path) -> None:
             color="0.45",
             linestyle=":",
             linewidth=0.9,
-            label=r"chosen $R/a$",
+            label=r"chosen $R$",
         ),
     ]
     figure = plt.figure(figsize=(fig_width, 0.4))
@@ -196,9 +197,8 @@ def _panel_data(summary: dict[str, object]) -> dict[str, object]:
 def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
     """Draw one dimension's variance ratio against the support radius.
 
-    Only $d=1$ spans enough decades to need a log-scale $y$-axis (the
-    lattice capacity vanishes as $R$ grows, Sec.~\\ref{sec:results}); $d=2,3$
-    stay within a factor of a few of 1 and are clearer on a linear scale.
+    Use a logarithmic y-axis in d=1 and logarithmic (R+1) and y axes
+    in d=2, where the closed-form power law becomes a straight line.
     """
     radii = data["radii"]
     axis.axhline(1.0, color="black", linewidth=0.8, zorder=1)
@@ -225,10 +225,7 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
         linewidth=1.0,
         zorder=3,
     )
-    if data["ndim"] == 1:
-        theory_radii = np.linspace(0.0, radii.max(), 200)
-    else:
-        theory_radii = np.linspace(max(radii.min(), 1.0), radii.max(), 200)
+    theory_radii = np.linspace(0.0, radii.max(), 200)
     theory = theoretical_ratio(data["ndim"], data["beta"], theory_radii)
     axis.plot(
         theory_radii,
@@ -239,23 +236,30 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
         zorder=2,
     )
 
-    is_log = data["ndim"] == 1
-    if is_log:
+    if data["ndim"] in (1, 2):
         axis.set_yscale("log")
         ymin = 0.6 * min(data["best"].min(), data["approx3"].min(), theory.min())
-        axis.set_ylim(ymin, 1.45)
-        axis.yaxis.set_major_locator(
-            LogLocator(base=10.0, subs=(1.0, 2.0, 3.0, 5.0), numticks=30)
-        )
+        axis.set_ylim(ymin, 1.45 if data["ndim"] == 1 else 1.15)
+        if data["ndim"] == 1:
+            axis.yaxis.set_major_locator(
+                LogLocator(base=10.0, subs=(1.0, 2.0, 3.0, 5.0), numticks=30)
+            )
+        else:
+            axis.set_yticks((0.1, 0.2, 0.5, 1.0), ("0.1", "0.2", "0.5", "1"))
         axis.yaxis.set_minor_formatter(NullFormatter())
     else:
         ymax = 1.08 * max(data["best"].max(), data["approx3"].max(), theory.max(), 1.0)
         axis.set_ylim(0.0, ymax)
-    axis.set_xlim(radii.min() - 0.6, radii.max() + 0.6)
-    axis.set_xticks(
-        [radius for radius in radii if radius % max(1, round(radii.max() / 5)) == 0]
-    )
-    axis.set_xlabel(r"$R/a$", labelpad=2)
+    if data["ndim"] == 2:
+        axis.set_xscale("function", functions=(np.log1p, np.expm1))
+        axis.set_xlim(-0.2, radii.max() + 0.6)
+        axis.set_xticks((0, 1, 2, 4, 7, 15))
+    else:
+        axis.set_xlim(radii.min() - 0.6, radii.max() + 0.6)
+        axis.set_xticks(
+            [radius for radius in radii if radius % max(1, round(radii.max() / 5)) == 0]
+        )
+    axis.set_xlabel(r"$R$", labelpad=2)
     axis.set_title(
         rf"$d={data['ndim']}$, $\beta={data['beta']:.2f}$, $L={data['lattice_size']}$",
         pad=4,
@@ -270,9 +274,8 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
 def make_figure(summaries: list[dict[str, object]]) -> plt.Figure:
     """Build the three-panel mask-radius-scan figure.
 
-    Only the $d=1$ panel is log-scale (see ``plot_panel``), so the $y$-axis
-    is not shared across panels; a single label centred on the figure
-    stands in for the three (identical) axis labels.
+    The y-axes have different scales, so a single label centred on the
+    figure stands in for their identical axis labels.
     """
     panels = [_panel_data(summary) for summary in summaries]
     figure, axes = plt.subplots(

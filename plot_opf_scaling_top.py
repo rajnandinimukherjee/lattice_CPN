@@ -322,9 +322,13 @@ def _plot_row(
         axis.xaxis.set_major_locator(MaxNLocator(nbins=5, prune="both"))
 
         if legend_handles:
+            # Anchor a little below the axes top (rather than flush with it)
+            # so the legend clears the y=1 reference line instead of sitting
+            # on top of it.
             axis.legend(
                 handles=legend_handles,
                 loc="upper left",
+                bbox_to_anchor=(0.0, 0.90),
                 ncols=2,
                 frameon=False,
                 fontsize=6.5,

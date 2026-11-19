@@ -1,4 +1,4 @@
-"""Generate Figure 2 from the saved XY and CP(2) one-point analyses."""
+"""Plot training diagnostics from saved XY and CP(2) one-point analyses."""
 
 from __future__ import annotations
 

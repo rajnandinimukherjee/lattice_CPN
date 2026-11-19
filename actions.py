@@ -313,3 +313,52 @@ class XYAction:
             energy = energy - \
                 torch.cos(fields - field_forward).sum(dim=self.latdims)
         return energy
+
+
+class ComplexScalarAction:
+    """Free complex scalar action in polar variables.
+
+    The normalization matches :class:`theory.ScalarAction` with
+    ``m2 = am**2``::
+
+        S = 1/2 (am)**2 sum_x R_x**2
+            + 1/2 sum_{x,mu} |phi_{x+mu} - phi_x|**2.
+
+    Keeping ``R`` and ``theta`` separate is essential on a deformed contour:
+    ``theta`` may be complex, while the radial field remains real.  Applying
+    ``abs`` to a deformed Cartesian field would use an antiholomorphic complex
+    conjugate and therefore evaluate the wrong action.
+    """
+
+    def __init__(self, am: float, ndims: int = 2) -> None:
+        if not torch.isfinite(torch.tensor(am)) or am <= 0:
+            raise ValueError("am must be positive and finite")
+        if ndims < 1:
+            raise ValueError("ndims must be positive")
+        self.am = float(am)
+        self.m2 = float(am) ** 2
+        self.latdims = tuple(range(-ndims, 0))
+
+    def __call__(
+        self,
+        fields: tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        """Evaluate the action for ``(R, theta)`` configurations."""
+        radial, theta = fields
+        if radial.shape != theta.shape:
+            raise ValueError("radial and angular fields must have equal shapes")
+        if radial.ndim < len(self.latdims):
+            raise ValueError("fields do not contain the requested lattice axes")
+
+        action = 0.5 * self.m2 * radial.square().sum(dim=self.latdims)
+        for axis in self.latdims:
+            radial_forward = torch.roll(radial, -1, dims=axis)
+            theta_forward = torch.roll(theta, -1, dims=axis)
+            difference = theta_forward - theta
+            link_action = (
+                radial_forward.square()
+                + radial.square()
+                - 2.0 * radial_forward * radial * torch.cos(difference)
+            )
+            action = action + 0.5 * link_action.sum(dim=self.latdims)
+        return action

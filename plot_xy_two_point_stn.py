@@ -1,4 +1,4 @@
-"""Plot the XY two-point signal-to-noise data used in Figure 3."""
+"""Plot the XY two-point variance, SNR gain, and shared figure legend."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ SUMMARY = (
     "xy_twopt_dim2_b0.65_L32_summary.npy"
 )
 FIGURES = ROOT / "paper" / "figs"
-PDF_OUTPUT = FIGURES / "xy_two_point_stn.pdf"
-PNG_OUTPUT = FIGURES / "xy_two_point_stn.png"
+PDF_OUTPUT = FIGURES / "xy_two_point_variance.pdf"
+PNG_OUTPUT = FIGURES / "xy_two_point_variance.png"
 LEGEND_PDF_OUTPUT = FIGURES / "xy_two_point_stn_legend.pdf"
 LEGEND_PNG_OUTPUT = FIGURES / "xy_two_point_stn_legend.png"
 
@@ -79,38 +79,23 @@ def load_summary() -> dict:
     return data
 
 
-def standard_error_series(data: dict) -> dict[str, np.ndarray]:
-    n_cfgs = np.asarray(data["n_cfgs"], dtype=float)
-    if not np.isfinite(n_cfgs).all() or np.any(n_cfgs <= 0):
-        raise ValueError("summary has a non-positive configuration count")
-    series = {}
-    for method in ("undeformed", "glued", "deformed"):
-        variance = np.asarray(data[f"{method}_variance"], dtype=float)
-        if not np.isfinite(variance).all() or np.any(variance <= 0):
-            raise ValueError(f"summary contains invalid {method} variances")
-        series[method] = np.sqrt(variance / n_cfgs)
-    return series
-
-
-def fixed_signal_snr_series(data: dict) -> dict[str, np.ndarray]:
-    signal = np.abs(np.asarray(data["undeformed_mean"], dtype=np.complex128))
-    if not np.isfinite(signal).all() or np.any(signal <= 0):
-        raise ValueError("summary contains invalid undeformed signal values")
-    standard_errors = standard_error_series(data)
-    return {
-        method: signal / standard_error
-        for method, standard_error in standard_errors.items()
-    }
-
-
 def make_plot(data: dict) -> plt.Figure:
     separations = np.asarray(data["time_separations"], dtype=int)
     if not np.array_equal(separations, np.arange(1, 17)):
         raise ValueError(f"unexpected time separations: {separations}")
-    signal = np.abs(np.asarray(data["undeformed_mean"], dtype=np.complex128))
-    standard_errors = standard_error_series(data)
-    snr = fixed_signal_snr_series(data)
-    gain = snr["glued"] / snr["undeformed"]
+    variances = {
+        method: np.asarray(data[f"{method}_variance"], dtype=float)
+        for method in ("undeformed", "glued", "deformed")
+    }
+    if any(values.shape != separations.shape or np.any(values <= 0)
+           or not np.isfinite(values).all() for values in variances.values()):
+        raise ValueError("invalid two-point variance series")
+    profile_path = ROOT / data["metadata"]["one_point_profile"]
+    one_point = np.load(profile_path, allow_pickle=True).item()
+    one_point_ratio = float(one_point["variance_ratio"])
+    if not np.isfinite(one_point_ratio) or one_point_ratio <= 0:
+        raise ValueError(f"invalid one-point variance ratio in {profile_path}")
+    gain = np.sqrt(variances["undeformed"] / variances["glued"])
 
     figure, (axis, gain_axis) = plt.subplots(
         2,
@@ -119,59 +104,18 @@ def make_plot(data: dict) -> plt.Figure:
         sharex=True,
         gridspec_kw={"height_ratios": [2.8, 1.2], "hspace": 0.12},
     )
-    axis.errorbar(
-        separations,
-        signal,
-        yerr=standard_errors["undeformed"],
-        fmt="o-",
-        color="black",
-        ecolor="black",
-        markersize=2.6,
-        linewidth=0.8,
-        elinewidth=0.7,
-        capsize=2.0,
-        capthick=0.7,
-        zorder=6,
-    )
-    series = (
-        {
-            "values": standard_errors["undeformed"],
-            "label": "Undeformed SE",
-            "color": "tab:blue",
-            "marker": "o",
-            "linestyle": "-",
-            "markersize": 4.0,
-            "zorder": 3,
-        },
-        {
-            "values": standard_errors["glued"],
-            "label": "Glued one-point profile SE",
-            "color": "tab:orange",
-            "marker": "s",
-            "linestyle": "-",
-            "markersize": 6.5,
-            "markerfacecolor": "none",
-            "markeredgewidth": 1.2,
-            "zorder": 4,
-        },
-        {
-            "values": standard_errors["deformed"],
-            "label": "Trained per separation SE",
-            "color": "tab:green",
-            "marker": "^",
-            "linestyle": "-",
-            "markersize": 6.5,
-            "markerfacecolor": "none",
-            "markeredgewidth": 1.2,
-            "zorder": 5,
-        },
-    )
-    for options in series:
-        options = dict(options)
-        values = options.pop("values")
-        axis.plot(separations, values, **options)
+    for method, color, marker in (
+        ("undeformed", "tab:blue", "o"),
+        ("glued", "tab:orange", "s"),
+        ("deformed", "tab:green", "^"),
+    ):
+        axis.plot(separations, variances[method], color=color, marker=marker,
+                  markerfacecolor="none" if method != "undeformed" else color,
+                  markersize=3.8, linewidth=0.9)
+    axis.axhline(one_point_ratio**2, color="tab:red", linestyle="--",
+                 linewidth=1.0)
 
-    all_values = np.concatenate([signal, *standard_errors.values()])
+    all_values = np.concatenate([*variances.values(), [one_point_ratio**2]])
     min_exponent = int(np.floor(np.log10(all_values.min())))
     max_exponent = int(np.ceil(np.log10(all_values.max())))
     if min_exponent == max_exponent:
@@ -183,7 +127,7 @@ def make_plot(data: dict) -> plt.Figure:
     axis.set_ylim(y_ticks[0], y_ticks[-1])
     axis.set_xticks(separations)
     axis.set_yticks(y_ticks, [rf"$10^{{{exponent}}}$" for exponent in exponents])
-    axis.set_ylabel(r"$\mathrm{SE}(t),\,|C(t)|$", labelpad=4)
+    axis.set_ylabel(r"$\operatorname{Var}[O_t O_0^\dagger]$", labelpad=4)
     axis.grid(color="0.8", linewidth=0.5, alpha=0.5)
     axis.set_axisbelow(True)
     axis.tick_params(direction="out", length=3.5, width=0.8, pad=2)
@@ -191,10 +135,10 @@ def make_plot(data: dict) -> plt.Figure:
     gain_axis.plot(
         separations,
         gain,
-        color="tab:purple",
+        color="tab:orange",
         marker="D",
         markersize=3.8,
-        linestyle="--",
+        linestyle="-",
         linewidth=0.9,
         zorder=3,
     )
@@ -236,22 +180,13 @@ def make_legend() -> plt.Figure:
             label=label,
         )
         for color, marker, label, markersize, markerfacecolor, markeredgewidth in (
-            ("tab:blue", "o", "Undeformed SE", 3.2, "tab:blue", 0.8),
-            ("tab:orange", "s", "Glued one-point profile SE", 6.0, "none", 1.2),
-            ("tab:green", "^", "Trained per separation SE", 6.0, "none", 1.2),
+            ("tab:blue", "o", "Undeformed", 3.2, "tab:blue", 0.8),
+            ("tab:orange", "s", "Glued one-point profile", 5.0, "none", 1.0),
+            ("tab:green", "^", "Trained per separation", 5.0, "none", 1.0),
         )
     ]
-    handles.append(
-        Line2D(
-            [],
-            [],
-            color="black",
-            marker="o",
-            markersize=2.6,
-            linewidth=0.8,
-            label=r"Signal $|C(t)|$ (error: undeformed SE)",
-        )
-    )
+    handles.append(Line2D([], [], color="tab:red", linestyle="--",
+                          linewidth=1.0, label="Squared one-point variance ratio"))
     figure = plt.figure(figsize=(fig_width, 0.32))
     figure.legend(
         handles,

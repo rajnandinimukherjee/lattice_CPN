@@ -349,6 +349,108 @@ class XYOnePtFn:
             return self.observable(fields)
 
 
+class ComplexScalarOnePtFn:
+    """Charged one-point observable for a free complex scalar field."""
+
+    def __init__(
+        self,
+        latsize: Sequence[int],
+        source: Sequence[int],
+        action: Any,
+    ) -> None:
+        self.latsize = tuple(latsize)
+        self.source = tuple(source)
+        self.action = action
+        self.grid = torch.zeros(*latsize, 1, dtype=torch.float32)
+        self.grid[*source, 0] = 1.0
+
+    def __repr__(self) -> str:
+        lattice = "x".join(str(length) for length in self.latsize)
+        return (
+            r"$\phi_" + str(self.source) + r"$, "
+            + rf"$am={self.action.am:g}$, {lattice}"
+        )
+
+    def observable(
+        self,
+        radial: torch.Tensor,
+        theta: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return ``R_s exp(i theta_s)`` without empirical centering."""
+        return radial[:, *self.source] * torch.exp(
+            1j * theta[:, *self.source]
+        )
+
+    @staticmethod
+    def _field_dependent_map(
+        theta: torch.Tensor,
+        coefficients: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate ``F=a+b sin(theta)+c cos(theta)`` and ``log det J``."""
+        a, b, c = coefficients.unbind(dim=-1)
+        deformation = a + b * torch.sin(theta) + c * torch.cos(theta)
+        derivative = b * torch.cos(theta) - c * torch.sin(theta)
+        lattice_axes = tuple(range(1, theta.ndim))
+        log_magnitude = 0.5 * torch.log1p(derivative.square()).sum(
+            dim=lattice_axes
+        )
+        phase = torch.atan(derivative).sum(dim=lattice_axes)
+        return deformation, torch.complex(log_magnitude, phase)
+
+    def __call__(
+        self,
+        model: Any,
+        deform: bool = False,
+        alphas: torch.Tensor | None = None,
+        batch_idx: torch.Tensor | slice = slice(None),
+        get_Sdiff: bool = False,
+        sampletype: str = "all",
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        """Evaluate the exact contour-reweighted one-point estimator."""
+        theta = model.samples[sampletype]
+        radial = model.radial_samples[sampletype]
+        if sampletype == "train":
+            theta = theta[batch_idx]
+            radial = radial[batch_idx]
+
+        if not deform:
+            return self.observable(radial, theta)
+        if alphas is None:
+            raise ValueError("alphas are required for a deformed observable")
+
+        action_undeformed = self.action((radial, theta))
+        if alphas.shape[-1] == 1:
+            deformation = alphas[..., 0]
+            log_det_jacobian = torch.zeros_like(
+                action_undeformed, dtype=torch.complex64
+            )
+        elif alphas.shape[-1] == 3:
+            expected_shape = (*self.latsize, 3)
+            if tuple(alphas.shape) != expected_shape:
+                raise ValueError(
+                    "field-dependent coefficients must have shape "
+                    f"{expected_shape}, got {tuple(alphas.shape)}"
+                )
+            deformation, log_det_jacobian = self._field_dependent_map(
+                theta, alphas
+            )
+        else:
+            raise ValueError(
+                "scalar deformation fields must have one channel (fixed) "
+                "or three channels (field-dependent)"
+            )
+
+        deformed_theta = theta + 1j * deformation
+        action_deformed = self.action((radial, deformed_theta))
+        action_difference = action_deformed - action_undeformed
+        if get_Sdiff:
+            return action_difference
+        return self.observable(radial, deformed_theta) * torch.exp(
+            -action_difference + log_det_jacobian
+        )
+
+
 class XYTwoPtFn:
     """Complex two-point observable for an XY field."""
 

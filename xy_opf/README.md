@@ -32,11 +32,13 @@ optimizes the overall scale against the XY variance.  The radial comparison
 script uses that method alongside the saved Approximation 1 and 2 profiles:
 
 ```shell
-python plot_xy_radial_profiles.py --betas 0.65 0.80 1.20 1.35 --lattice-size 32
+python plot_xy_radial_profiles.py --betas 0.65 0.80 1.20 1.35 --lattice-size 32 \
+  --output plots/xy_radial_profiles_exploratory.pdf
 ```
 
 It expects matching XY ensembles in `data/` and writes PDF and PNG copies
-under `paper/figs/`.
+under `plots/`. The paper panels are generated separately by
+`plot_radial_profile_panels.py`.
 
 Approximation 3 can also be run over every ensemble matching the requested
 dimensions and lattice sizes. Each beta result is saved immediately as a
@@ -50,7 +52,7 @@ MPLBACKEND=Agg python xy_OPF_analysis.py --run --dims 1 --Ls 64 \
 MPLBACKEND=Agg python xy_OPF_analysis.py --run --dims 2 3 --Ls 32 16 \
   --loss-function approx3 --mask-radius 6 --no-plot-training
 MPLBACKEND=Agg python xy_OPF_analysis.py --no-run --dims 1 2 3 --Ls 64 32 16 \
-  --save-plot paper/figs/xy_scaling.pdf
+  --save-plot plots/xy_scaling_exploratory.pdf
 ```
 
 For a configuration-dependent XY deformation, select

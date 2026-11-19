@@ -6,7 +6,7 @@ The panel layout (one column per dimension/lattice size, critical-temperature
 marking and disordered-phase shading, axis labels) matches the full
 ``xy_scaling``/``cp2_scaling`` figure exactly, but keeps only the
 variance-ratio row and only the Approximation 3 series, drawn with the
-connected line+marker style of ``xy_mask_radius_scaling`` instead of bare
+connected line+marker style of the saved mask-radius scan instead of bare
 scatter points.
 """
 
@@ -32,6 +32,7 @@ from plot_settings import fig_width, latex_font_params
 
 from cpn_opf.config import GAUGE_CRITICAL_TEMPERATURES
 from cpn_opf.study import _load_dimension as _load_cpn_dimension
+from csft_opf.persistence import read_variance_ratio_data, ratio_savename
 from xy_opf.config import XY_CRITICAL_TEMPERATURES
 from xy_opf.study import _load_dimension as _load_xy_dimension
 
@@ -43,8 +44,8 @@ APPROX3_LABEL = "Approx. 3 (smooth deformation)"
 EXTRA_RADIUS_MARKER_SIZE = 2.5
 CHOSEN_RADIUS_MARKER_AREA = 14
 
-# Companion mask-radius scan (the ``xy_mask_radius_scaling`` figure): the
-# periodic support radius was varied at fixed Approximation 3, repeated over
+# In the saved mask-radius scan, the periodic support radius was varied at
+# fixed Approximation 3, repeated over
 # every XY ensemble used here.  Only this one dataset backs the extra, faded
 # series added to the XY panel.
 XY_MASK_RADIUS_RESULTS = Path("training_data/xy_mask_radius_scaling/results.json")
@@ -442,6 +443,63 @@ def _make_panel(
     plt.close(fig)
 
 
+def _make_csft_panel(output_path: Path) -> None:
+    """Plot the saved scalar mass scans with the continuum limit marked."""
+    fig, axes = plt.subplots(
+        1, 3, figsize=(fig_width, 0.36 * fig_width), sharey=False
+    )
+    for dim, axis in enumerate(axes, start=1):
+        metadata, ratios_by_am = read_variance_ratio_data(
+            ratio_savename(dim, "approx3"), dim, "approx3"
+        )
+        masses = np.asarray(sorted(ratios_by_am), dtype=float)
+        ratios = np.asarray([ratios_by_am[am] for am in masses])
+        if len(masses) == 0 or np.any(masses <= 0) or np.any(ratios <= 0):
+            raise ValueError(f"invalid complex-scalar scan for d={dim}")
+
+        axis.plot(masses, ratios, color=APPROX3_COLOR, lw=0.9, zorder=2)
+        axis.scatter(
+            masses, ratios, color=APPROX3_COLOR, marker=APPROX3_MARKER,
+            s=CHOSEN_RADIUS_MARKER_AREA, linewidths=0.6,
+            edgecolors="white", zorder=3,
+        )
+        axis.axhline(1.0, color="black", lw=0.8, zorder=1)
+        axis.set_yscale("log")
+        axis.set_ylim(bottom=float(ratios.min()) / 1.5, top=1.2)
+        axis.yaxis.set_minor_formatter(NullFormatter())
+        if ratios.min() > 0.01:
+            ticks = [
+                tick for tick in (0.1, 0.2, 0.5, 1.0)
+                if axis.get_ylim()[0] < tick < axis.get_ylim()[1]
+            ]
+            axis.yaxis.set_major_locator(FixedLocator(ticks))
+            axis.yaxis.set_major_formatter(FormatStrFormatter("%g"))
+        axis.set_xlim(-0.035, 1.04)
+        axis.set_xticks([0.25, 0.5, 0.75, 1.0])
+        axis.set_title(rf"$d={dim},\ L={metadata['lattice_size']}$", pad=3)
+        axis.set_axisbelow(True)
+        axis.grid(color="0.8", lw=0.5, alpha=0.5)
+
+        axis.axvspan(0.0, axis.get_xlim()[1],
+                     facecolor="0.96", edgecolor="none", zorder=-1)
+        axis.axvline(0.0, color="black", ls=":", lw=0.8, zorder=1)
+        continuum_axis = axis.secondary_xaxis("top")
+        continuum_axis.set_xticks([0.0], labels=[r"$a=0$"])
+        continuum_axis.tick_params(axis="x", pad=1, labelsize=6)
+
+    axes[0].set_ylabel(
+        r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$"
+    )
+    fig.supxlabel(r"$am$")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.90), w_pad=0.0, h_pad=0.0)
+    fig.subplots_adjust(wspace=0.26, bottom=0.26, top=0.78)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, bbox_inches="tight")
+    fig.savefig(output_path.with_suffix(".png"), dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     xy_dims, xy_lattice_sizes, xy_betas, xy_ratios = _load_xy_approx3()
     cp2_dims, cp2_lattice_sizes, cp2_betas, cp2_ratios = _load_cp2_approx3()
@@ -474,10 +532,12 @@ def main() -> None:
         FIGURES_DIRECTORY / "cp2_scaling_top.pdf",
         main_radius_by_dim=cp2_main_radius,
     )
+    _make_csft_panel(FIGURES_DIRECTORY / "csft_scaling_top.pdf")
 
     for path in (
         FIGURES_DIRECTORY / "xy_scaling_top.pdf",
         FIGURES_DIRECTORY / "cp2_scaling_top.pdf",
+        FIGURES_DIRECTORY / "csft_scaling_top.pdf",
     ):
         print(f"Wrote {path}")
 

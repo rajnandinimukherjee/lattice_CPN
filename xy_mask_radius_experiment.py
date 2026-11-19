@@ -28,7 +28,7 @@ the whole lattice, where a constant imaginary shift leaves the XY action
 invariant and rescales the one-point function by ``e^{-F_0}``.  Signal and
 noise are then scaled together, so ``Var[Q]/Var[O]`` runs to zero at no
 action cost without improving the signal-to-noise ratio.  That limit is the
-unmasked degeneracy of Fig. 1, not a variance reduction, and the training
+unmasked one-point degeneracy, not a variance reduction, and the training
 objective is unbounded there.
 
 Run, for example:

@@ -20,7 +20,7 @@ OUTPUT = ROOT / "paper" / "figs" / "xy_field_comparison.pdf"
 
 
 def main() -> None:
-    figure, axis = plt.subplots(figsize=(5.0, 2.35))
+    figure, axis = plt.subplots(figsize=(3.5, 1.9))
     for label, path, color in (
         ("Field-independent", TRAINING["Field-independent"], "tab:blue"),
         ("Field-dependent", TRAINING["Field-dependent"], "tab:orange"),
@@ -50,7 +50,7 @@ def main() -> None:
     axis.legend(loc="upper right", frameon=False, handlelength=2.4)
     axis.grid(axis="y", color="0.88", linewidth=0.5)
     axis.tick_params(direction="out", length=2.5, width=0.65)
-    figure.subplots_adjust(left=0.14, right=0.94, bottom=0.20, top=0.96)
+    figure.subplots_adjust(left=0.20, right=0.94, bottom=0.25, top=0.95)
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(OUTPUT)

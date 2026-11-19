@@ -1,4 +1,4 @@
-"""Train isolated near-zero CP(2) histories for Figure 2(c,d)."""
+"""Train isolated near-zero CP(2) histories for diagnostic plots."""
 
 from __future__ import annotations
 

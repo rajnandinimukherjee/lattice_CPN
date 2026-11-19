@@ -1,4 +1,4 @@
-"""Update only Figure 2(c,d) from the isolated near-zero CP(2) runs."""
+"""Update the CP(2) training diagnostics from isolated near-zero runs."""
 
 from __future__ import annotations
 

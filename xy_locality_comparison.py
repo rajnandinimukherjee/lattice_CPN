@@ -519,12 +519,12 @@ def main() -> None:
     cbar_gap_in = 0.12 * FONT_SCALE
     cbar_width_in = 0.11 * FONT_SCALE
 
-    # --- Figure 1: training history + stacked one-point heatmaps ---------
+    # --- Training history + stacked one-point heatmaps --------------------
     # The raw canvas is made generously wide so nothing clips against its
     # hard edge; ``save_tight_fixed_height`` below then crops away whatever
     # dead margin is left, so only the actual content sets the final width.
     onept_width = 9.0
-    fig1 = plt.figure(figsize=(onept_width, fig_height))
+    onept_figure = plt.figure(figsize=(onept_width, fig_height))
 
     curve_left_in = 0.68 * FONT_SCALE
     heatmap_left_in = curve_left_in + square_size + 0.58 * FONT_SCALE
@@ -538,9 +538,9 @@ def main() -> None:
         ]
 
     # (a) combined training curve, square and the same size as a two-point
-    # heatmap panel in Figure 2, top-aligned with panel (b).
+    # heatmap panel in the two-point plot, top-aligned with panel (b).
     curve_bottom_in = fig_height - top_pad - title_h - square_size
-    curve_axis = fig1.add_axes(
+    curve_axis = onept_figure.add_axes(
         axes_rect(onept_width, curve_left_in, curve_bottom_in, square_size)
     )
     epochs = np.arange(epoch_count)
@@ -595,7 +595,7 @@ def main() -> None:
     # same total height as the training/two-point panels above.
     c_bottom_in = bottom_pad + xlabel_h
     b_bottom_in = c_bottom_in + stacked_size + title_h + gap_bc
-    axis_b = fig1.add_axes(
+    axis_b = onept_figure.add_axes(
         axes_rect(onept_width, heatmap_left_in, b_bottom_in, stacked_size)
     )
     image_b = plot_heatmap(
@@ -603,10 +603,10 @@ def main() -> None:
         title="(b) unmasked $F_x$", xlabel=False, ylabel=True,
     )
     add_colorbar(
-        fig1, axis_b, image_b, fig_width=onept_width, gap_in=cbar_gap_in,
+        onept_figure, axis_b, image_b, fig_width=onept_width, gap_in=cbar_gap_in,
         width_in=cbar_width_in, tick_labelsize=cbar_tick_labelsize,
     )
-    axis_c = fig1.add_axes(
+    axis_c = onept_figure.add_axes(
         axes_rect(onept_width, heatmap_left_in, c_bottom_in, stacked_size),
         sharex=axis_b, sharey=axis_b,
     )
@@ -622,26 +622,26 @@ def main() -> None:
     # fit instead (the shared x-axis means this also fixes panel (b)).
     axis_c.set_xticks([-10, 10])
     add_colorbar(
-        fig1, axis_c, image_c, fig_width=onept_width, gap_in=cbar_gap_in,
+        onept_figure, axis_c, image_c, fig_width=onept_width, gap_in=cbar_gap_in,
         width_in=cbar_width_in, tick_labelsize=cbar_tick_labelsize,
     )
 
-    save_tight_fixed_height(fig1, args.output_onept, fig_height=fig_height)
+    save_tight_fixed_height(onept_figure, args.output_onept, fig_height=fig_height)
     print(f"Saved one-point locality figure to {args.output_onept}")
-    plt.close(fig1)
+    plt.close(onept_figure)
 
-    # --- Figure 2: glued vs. directly-trained two-point heatmaps ---------
+    # --- Glued vs. directly-trained two-point heatmaps --------------------
     two_point_limit = max(
         float(np.abs(glued_field).max()), float(np.abs(trained_field).max())
     )
     twopt_width = 11.0
-    fig2 = plt.figure(figsize=(twopt_width, fig_height))
+    twopt_figure = plt.figure(figsize=(twopt_width, fig_height))
 
     d_left_in = 0.60 * FONT_SCALE
     e_left_in = d_left_in + square_size + 0.35 * FONT_SCALE
     d_bottom_in = bottom_pad + xlabel_h
 
-    def axes_rect2(left_in, bottom_in, side_in):
+    def twopt_axes_rect(left_in, bottom_in, side_in):
         return [
             left_in / twopt_width,
             bottom_in / fig_height,
@@ -649,7 +649,7 @@ def main() -> None:
             side_in / fig_height,
         ]
 
-    axis_d = fig2.add_axes(axes_rect2(d_left_in, d_bottom_in, square_size))
+    axis_d = twopt_figure.add_axes(twopt_axes_rect(d_left_in, d_bottom_in, square_size))
     image_d = plot_heatmap(
         axis_d, glued_field, vlim=two_point_limit,
         title=r"(d) glued, $\Delta t=10$", xlabel=True, ylabel=True,
@@ -661,8 +661,8 @@ def main() -> None:
             axis_d, (x0, SOURCE[1]), radius=MASK_RADIUS,
             linewidth=0.8 * FONT_SCALE,
         )
-    axis_e = fig2.add_axes(
-        axes_rect2(e_left_in, d_bottom_in, square_size),
+    axis_e = twopt_figure.add_axes(
+        twopt_axes_rect(e_left_in, d_bottom_in, square_size),
         sharex=axis_d, sharey=axis_d,
     )
     plot_heatmap(
@@ -672,14 +672,14 @@ def main() -> None:
     )
 
     cax_de = add_colorbar(
-        fig2, axis_e, image_d, fig_width=twopt_width, gap_in=cbar_gap_in,
+        twopt_figure, axis_e, image_d, fig_width=twopt_width, gap_in=cbar_gap_in,
         width_in=cbar_width_in, tick_labelsize=cbar_tick_labelsize,
     )
     cax_de.set_ylabel(r"$F_x$", labelpad=2, fontsize=cbar_label_fontsize)
 
-    save_tight_fixed_height(fig2, args.output_twopt, fig_height=fig_height)
+    save_tight_fixed_height(twopt_figure, args.output_twopt, fig_height=fig_height)
     print(f"Saved two-point locality figure to {args.output_twopt}")
-    plt.close(fig2)
+    plt.close(twopt_figure)
 
     print(
         "two-point variance ratios: glued="

@@ -1,4 +1,4 @@
-"""Plot saved Approximation 3 XY profiles at fixed R/xi for Figure 10.
+"""Plot saved Approximation 3 XY profiles at fixed R/xi.
 
 The physical-radius scan has already optimized each deformation amplitude.
 This script reads its saved scaled fields without rerunning the fit.

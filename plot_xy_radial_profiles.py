@@ -143,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("paper/figs/xy_radial_profiles.pdf"),
+        default=Path("plots/xy_radial_profiles_exploratory.pdf"),
         help="output profile-only PDF path; a PNG preview is saved alongside it",
     )
     parser.add_argument(

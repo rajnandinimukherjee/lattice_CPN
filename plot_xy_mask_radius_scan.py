@@ -79,12 +79,12 @@ def theoretical_ratio(ndim: int, beta: float, radii: np.ndarray) -> np.ndarray:
 plt.rcParams.update(latex_font_params)
 plt.rcParams.update(
     {
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "axes.titlesize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
+        "font.size": 11,
+        "axes.labelsize": 11,
+        "axes.titlesize": 11,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
         "axes.linewidth": 0.8,
         "lines.linewidth": 1.0,
         "pdf.fonttype": 42,
@@ -150,7 +150,7 @@ def save_legend(output_path: Path) -> None:
             label=r"chosen $R/a$",
         ),
     ]
-    figure = plt.figure(figsize=(fig_width, 0.32))
+    figure = plt.figure(figsize=(fig_width, 0.4))
     figure.legend(
         handles,
         [handle.get_label() for handle in handles],
@@ -249,7 +249,9 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
         axis.set_yscale("log")
         ymin = 0.6 * min(data["best"].min(), data["approx3"].min(), theory.min())
         axis.set_ylim(ymin, 1.45)
-        axis.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 3.0, 5.0)))
+        axis.yaxis.set_major_locator(
+            LogLocator(base=10.0, subs=(1.0, 2.0, 3.0, 5.0), numticks=30)
+        )
         axis.yaxis.set_minor_formatter(NullFormatter())
     else:
         ymax = 1.08 * max(data["best"].max(), data["approx3"].max(), theory.max(), 1.0)
@@ -259,13 +261,8 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
         [radius for radius in radii if radius % max(1, round(radii.max() / 5)) == 0]
     )
     axis.set_xlabel(r"$R/a$", labelpad=2)
-    lattice_label = (
-        f"${data['lattice_size']}$"
-        if data["ndim"] == 1
-        else rf"${data['lattice_size']}^{{{data['ndim']}}}$"
-    )
     axis.set_title(
-        rf"$d={data['ndim']}$, $\beta={data['beta']:.2f}$, " + lattice_label,
+        rf"$d={data['ndim']}$, $\beta={data['beta']:.2f}$, $L={data['lattice_size']}$",
         pad=4,
     )
     axis.grid(color="0.8", linewidth=0.5, alpha=0.5, which="major")
@@ -286,19 +283,19 @@ def make_figure(summaries: list[dict[str, object]]) -> plt.Figure:
     figure, axes = plt.subplots(
         1,
         len(panels),
-        figsize=(fig_width, 0.40 * fig_width),
-        gridspec_kw={"wspace": 0.32},
+        figsize=(fig_width, 0.32 * fig_width),
+        gridspec_kw={"wspace": 0.28},
     )
     for axis, data in zip(axes, panels):
         plot_panel(axis, data)
 
     figure.supylabel(
         r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$",
-        fontsize=8,
-        x=0.012,
+        fontsize=11,
+        x=0.01,
     )
     figure.subplots_adjust(
-        left=0.085, right=0.995, bottom=0.17, top=0.90, wspace=0.32
+        left=0.095, right=0.995, bottom=0.21, top=0.88, wspace=0.28
     )
     return figure
 

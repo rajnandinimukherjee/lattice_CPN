@@ -127,10 +127,7 @@ def save_legend(output_path: Path) -> None:
             color="tab:red",
             marker="D",
             markersize=3.4,
-            markerfacecolor="none",
-            markeredgewidth=0.9,
-            linestyle="--",
-            linewidth=0.9,
+            linewidth=1.0,
             label="Approx. 3 (smooth deformation)",
         ),
         Line2D(
@@ -224,10 +221,8 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
         color="tab:red",
         marker="D",
         markersize=3.4,
-        markerfacecolor="none",
-        markeredgewidth=0.9,
-        linestyle="--",
-        linewidth=0.9,
+        linestyle="-",
+        linewidth=1.0,
         zorder=3,
     )
     if data["ndim"] == 1:

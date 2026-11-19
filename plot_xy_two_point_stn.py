@@ -124,7 +124,7 @@ def make_plot(data: dict) -> plt.Figure:
     y_ticks = 10.0**exponents
     axis.set_yscale("log")
     axis.set_xlim(0.5, 16.5)
-    axis.set_ylim(y_ticks[0], y_ticks[-1])
+    axis.set_ylim(y_ticks[0], y_ticks[-1] * 1.2)
     axis.set_xticks(separations)
     axis.set_yticks(y_ticks, [rf"$10^{{{exponent}}}$" for exponent in exponents])
     axis.set_ylabel(r"$\operatorname{Var}[O_t O_0^\dagger]$", labelpad=4)
@@ -144,7 +144,7 @@ def make_plot(data: dict) -> plt.Figure:
     )
     gain_axis.axhline(1.0, color="0.35", linestyle=":", linewidth=0.8, zorder=1)
     gain_axis.set_xlim(0.5, 16.5)
-    gain_upper = float(np.ceil(gain.max() * 2) / 2)
+    gain_upper = float(np.ceil(gain.max() * 2) / 2 + 0.5)
     gain_axis.set_ylim(0.8, gain_upper)
     gain_tick_step = 0.5 if gain_upper <= 3 else 2.0
     gain_tick_margin = 0.5 if gain_upper <= 3 else 1.0

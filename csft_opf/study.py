@@ -21,6 +21,7 @@ from .optimization import fit_lattice_laplace_profile, run_saddle_point
 from .persistence import (
     am_key,
     delete_am_training_data,
+    ensemble_filename,
     ensemble_files_for_dimension,
     load_deformations_at_source,
     load_variance_ratios,
@@ -155,19 +156,14 @@ def _run_dimension(
 ) -> None:
     if requested_masses:
         ensembles = [
-            (
-                am,
-                DATA_DIRECTORY
-                / f"csft_dim{ndim}_am{am:.3f}_L{lattice_size}_ens.npy",
-            )
+            (am, ensemble_filename(ndim, lattice_size, am))
             for am in requested_masses
         ]
     else:
         ensembles = ensemble_files_for_dimension(ndim, lattice_size)
     if not ensembles:
         raise FileNotFoundError(
-            f"no csft_dim{ndim}_am*_L{lattice_size}_ens.npy files in "
-            f"{DATA_DIRECTORY}"
+            f"no Nd{ndim}_L{lattice_size}_m*.npz files in {DATA_DIRECTORY}"
         )
 
     source = (0,) * ndim

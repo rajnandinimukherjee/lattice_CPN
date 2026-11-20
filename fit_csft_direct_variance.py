@@ -9,12 +9,12 @@ Raw free-field ensembles are the ``data/Nd*_L*_m*.npz`` files used by the scalar
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from csft_opf.persistence import (
+    ensemble_filename,
     ratio_savename,
     training_files_for_dimension,
     training_savename,
@@ -55,9 +55,9 @@ def variance_for_indices(
 
 
 def fit_one(dim: int, mass: float, *, steps: int, batch_size: int,
-            refit: bool = False) -> None:
+            refit: bool = False, learning_rate: float | None = None) -> None:
     length = LATTICE_SIZES[dim]
-    ensemble_path = Path(f"data/Nd{dim}_L{length}_m{mass:.2f}.npz")
+    ensemble_path = ensemble_filename(dim, length, mass)
     approx_path = training_savename(dim, mass, "approx3")
     saved_path = training_savename(dim, mass, "variance")
     if saved_path.exists() and not refit:
@@ -88,7 +88,8 @@ def fit_one(dim: int, mass: float, *, steps: int, batch_size: int,
     training_indices = permutation[:n_training]
     validation_indices = permutation[n_training:]
     residual = torch.nn.Parameter(torch.zeros_like(initial))
-    learning_rate = {1: 0.015, 2: 0.005, 3: 0.001}[dim]
+    if learning_rate is None:
+        learning_rate = {1: 0.015, 2: 0.005, 3: 0.001}[dim]
     optimizer = torch.optim.Adam([residual], lr=learning_rate)
     best_field = initial.clone()
     with torch.no_grad():
@@ -169,6 +170,8 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=180)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--refit", action="store_true")
+    parser.add_argument("--learning-rate", type=float, default=None,
+                        help="override the per-dimension Adam step size")
     args = parser.parse_args()
     if args.dim is None and args.mass is not None:
         parser.error("--mass requires --dim")
@@ -179,7 +182,7 @@ def main() -> None:
         ]
         for mass in masses:
             fit_one(dim, mass, steps=args.steps, batch_size=args.batch_size,
-                    refit=args.refit)
+                    refit=args.refit, learning_rate=args.learning_rate)
 
 
 if __name__ == "__main__":

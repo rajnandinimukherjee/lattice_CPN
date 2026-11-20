@@ -229,14 +229,30 @@ def delete_am_training_data(
     return deleted, removed
 
 
+def ensemble_filename(ndim: int, lattice_size: str | int, am: float) -> Path:
+    """Return the native ``theory.py``-generated ensemble path.
+
+    Files are named ``Nd{dim}_L{L}_m{am}.npz`` by the data-generation
+    pipeline one directory above this repository, which writes as many
+    decimals as the mass needs (``m0.25`` but ``m0.125``), so the mass is
+    matched by value rather than by a fixed format.
+    """
+    target = am_key(am)
+    for mass, path in ensemble_files_for_dimension(ndim, str(lattice_size)):
+        if am_key(mass) == target:
+            return path
+    raise FileNotFoundError(
+        f"no ensemble for dimension {ndim}, L={lattice_size}, am={target:g} "
+        f"in {DATA_DIRECTORY}"
+    )
+
+
 def ensemble_files_for_dimension(
     ndim: int,
     lattice_size: str,
 ) -> list[tuple[float, Path]]:
     files = []
-    for path in DATA_DIRECTORY.glob(
-        f"csft_dim{ndim}_am*_L{lattice_size}_ens.npy"
-    ):
-        mass = path.stem.split("_am", 1)[1].rsplit("_L", 1)[0]
+    for path in DATA_DIRECTORY.glob(f"Nd{ndim}_L{lattice_size}_m*.npz"):
+        mass = path.stem.rsplit("_m", 1)[1]
         files.append((float(mass), path))
     return sorted(files)

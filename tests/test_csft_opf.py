@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ import torch
 import CSFT_utils
 from actions import ComplexScalarAction
 from csft_opf.cli import build_parser, validate_args
+from csft_opf.persistence import ensemble_filename, ensemble_files_for_dimension
 from csft_opf.optimization import (
     fit_lattice_laplace_profile,
     mean_link_coefficient,
@@ -82,6 +84,30 @@ class ComplexScalarLoadingTests(unittest.TestCase):
         self.assertEqual(raw_fields.dtype, torch.complex64)
         torch.testing.assert_close(raw_fields, wrapped_fields)
 
+    def test_loader_accepts_native_generator_npz_archive(self) -> None:
+        """Matches the ``Nd{d}_L{L}_m{am:.2f}.npz`` files produced one
+        directory above this repository by ``theory.ScalarAction.sample``."""
+        rng = np.random.default_rng(0)
+        cfgs = rng.normal(size=(4, 3)) + 1j * rng.normal(size=(4, 3))
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "Nd1_L3_m0.50.npz"
+            np.savez(
+                archive,
+                cfgs=cfgs,
+                actions=np.zeros(4),
+                Nd=1,
+                L=3,
+                m=0.5,
+                m2=0.25,
+            )
+            loaded_fields, loaded_mass = CSFT_utils.load_ensemble(
+                archive, expected_am=0.5
+            )
+        self.assertEqual(loaded_mass, 0.5)
+        torch.testing.assert_close(
+            loaded_fields, torch.as_tensor(cfgs, dtype=torch.complex64)
+        )
+
 
 class ComplexScalarApproximationTests(unittest.TestCase):
     def test_saddle_gradient_matches_finite_difference(self) -> None:
@@ -148,6 +174,51 @@ class ComplexScalarApproximationTests(unittest.TestCase):
         )
         self.assertTrue(np.isfinite(result["variance_ratio"]))
         self.assertEqual(np.asarray(result["f_x"])[0, 0], 1.0)
+
+
+class ComplexScalarPersistenceTests(unittest.TestCase):
+    @staticmethod
+    @contextlib.contextmanager
+    def _data_directory(names: tuple[str, ...]):
+        """Point the persistence layer at a directory of empty ensembles."""
+        import csft_opf.persistence as persistence_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_directory = Path(directory)
+            for name in names:
+                (data_directory / name).touch()
+            original = persistence_module.DATA_DIRECTORY
+            persistence_module.DATA_DIRECTORY = data_directory
+            try:
+                yield data_directory
+            finally:
+                persistence_module.DATA_DIRECTORY = original
+
+    def test_ensemble_discovery_finds_generator_files(self) -> None:
+        names = tuple(f"Nd3_L16_m{am:.2f}.npz" for am in (0.33, 0.67, 1.0))
+        with self._data_directory(names):
+            found = ensemble_files_for_dimension(3, "16")
+        self.assertEqual([am for am, _ in found], [0.33, 0.67, 1.0])
+
+    def test_ensemble_filename_matches_generator_convention(self) -> None:
+        with self._data_directory(("Nd3_L16_m0.67.npz",)):
+            self.assertEqual(
+                ensemble_filename(3, 16, 0.67).name, "Nd3_L16_m0.67.npz"
+            )
+
+    def test_ensemble_filename_handles_three_decimal_masses(self) -> None:
+        """The generator writes as many decimals as the mass needs, so
+        ``0.125`` must not be looked up as a two-decimal ``0.12``."""
+        names = ("Nd2_L32_m0.125.npz", "Nd2_L32_m0.25.npz")
+        with self._data_directory(names):
+            self.assertEqual(
+                ensemble_filename(2, 32, 0.125).name, "Nd2_L32_m0.125.npz"
+            )
+            self.assertEqual(
+                ensemble_filename(2, 32, 0.25).name, "Nd2_L32_m0.25.npz"
+            )
+            with self.assertRaises(FileNotFoundError):
+                ensemble_filename(2, 32, 0.4)
 
 
 class ComplexScalarCliTests(unittest.TestCase):

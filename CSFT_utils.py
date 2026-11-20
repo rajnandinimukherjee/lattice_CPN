@@ -23,7 +23,24 @@ def load_ensemble(
     """
     loaded = np.load(filename, allow_pickle=True)
     stored_am: float | None = None
-    if loaded.shape == () and isinstance(loaded.item(), dict):
+    if isinstance(loaded, np.lib.npyio.NpzFile):
+        # The native format produced by the data-generation pipeline: an
+        # ``.npz`` archive with a ``cfgs`` array and a scalar ``m`` (bare
+        # mass) field, alongside provenance metadata.
+        with loaded as archive:
+            field_key = next(
+                (key for key in ("cfgs", "phi", "fields") if key in archive.files),
+                None,
+            )
+            if field_key is None:
+                raise ValueError(f"no 'cfgs'/'phi' field found in {filename}")
+            fields = np.asarray(archive[field_key])
+            mass_key = next(
+                (key for key in ("m", "am") if key in archive.files), None
+            )
+            if mass_key is not None:
+                stored_am = float(archive[mass_key])
+    elif loaded.shape == () and isinstance(loaded.item(), dict):
         payload: dict[str, Any] = loaded.item()
         field_data = payload.get("phi", payload.get("fields"))
         if field_data is None:

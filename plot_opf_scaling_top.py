@@ -432,7 +432,7 @@ def _make_panel(
     axes[0, 0].set_ylabel(
         r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$"
     )
-    fig.supxlabel(r"$T=\beta^{-1}$")
+    fig.supxlabel(r"$T=\beta^{-1}$", y=0.08)
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.90), w_pad=0.0, h_pad=0.0)
     fig.subplots_adjust(wspace=0.26, bottom=0.26, top=0.78)
@@ -479,6 +479,24 @@ def _make_csft_panel(output_path: Path) -> None:
         axis.set_title(rf"$d={dim},\ L={metadata['lattice_size']}$", pad=3)
         axis.set_axisbelow(True)
         axis.grid(color="0.8", lw=0.5, alpha=0.5)
+        axis.legend(
+            handles=[
+                Line2D(
+                    [], [], color=APPROX3_COLOR, marker=APPROX3_MARKER,
+                    markersize=3.2, markeredgewidth=0.0, linewidth=1.0,
+                    label=r"$R=6$",
+                )
+            ],
+            loc="upper right",
+            bbox_to_anchor=(1.0, 0.93),
+            bbox_transform=blended_transform_factory(axis.transAxes, axis.transData),
+            frameon=False,
+            fontsize=6.5,
+            handlelength=1.3,
+            handletextpad=0.3,
+            borderpad=0.1,
+            borderaxespad=0.3,
+        )
 
         axis.axvspan(0.0, axis.get_xlim()[1],
                      facecolor="0.96", edgecolor="none", zorder=-1)
@@ -490,7 +508,7 @@ def _make_csft_panel(output_path: Path) -> None:
     axes[0].set_ylabel(
         r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$"
     )
-    fig.supxlabel(r"$am$")
+    fig.supxlabel(r"$am$", y=0.08)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.90), w_pad=0.0, h_pad=0.0)
     fig.subplots_adjust(wspace=0.26, bottom=0.26, top=0.78)
 

@@ -28,7 +28,7 @@ from matplotlib.ticker import FixedLocator, FormatStrFormatter, MaxNLocator, Nul
 from matplotlib.transforms import blended_transform_factory
 import numpy as np
 
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 from cpn_opf.config import GAUGE_CRITICAL_TEMPERATURES
 from cpn_opf.study import _load_dimension as _load_cpn_dimension
@@ -38,7 +38,7 @@ from xy_opf.study import _load_dimension as _load_xy_dimension
 
 FIGURES_DIRECTORY = Path("paper/figs")
 
-APPROX3_COLOR = "tab:red"
+APPROX3_COLOR = OBJECTIVE_COLORS["approx3"]
 APPROX3_MARKER = "D"
 APPROX3_LABEL = "Approx. 3 (smooth deformation)"
 EXTRA_RADIUS_MARKER_SIZE = 2.5
@@ -55,12 +55,8 @@ XY_MASK_RADIUS_RESULTS = Path("training_data/xy_mask_radius_scaling/results.json
 # for d=2, 3).
 XY_MASK_RADIUS_EXCLUDE = {1: 4, 2: 8, 3: 1}
 
-# Extra radii smaller than the dimension's own Approximation 3 radius are
-# drawn in faded reds (lighter for smaller R); extra radii larger than it are
-# drawn in faded browns (darker for larger R) instead, so the one radius
-# actually used for the rest of the paper's Approximation 3 results keeps its
-# plain ``APPROX3_COLOR`` and is never confused with a merely lighter red.
-BROWN_COLOR = "saddlebrown"
+# Extra radii use lighter or darker shades of the Approximation 3 color;
+# the chosen radius keeps its exact paper-wide objective color.
 BLEND_LIGHT = 0.32
 BLEND_DARK = 0.82
 
@@ -85,6 +81,15 @@ def _graded_shades(
     else:
         fractions = np.linspace(BLEND_LIGHT, BLEND_DARK, count)
     return [_blend_with_white(base_color, fraction) for fraction in fractions]
+
+
+def _dark_shades(base_color: str, count: int) -> list[tuple[float, float, float]]:
+    """Shades below the fixed objective color, darkest for largest radius."""
+    if count <= 0:
+        return []
+    base = np.array(to_rgb(base_color))
+    fractions = np.linspace(0.88, 0.64, count)
+    return [tuple(base * fraction) for fraction in fractions]
 
 
 def _load_xy_mask_radius_series(
@@ -264,10 +269,7 @@ def _plot_row(
             legend_entries.append((main_radius, APPROX3_COLOR, APPROX3_MARKER))
 
         extra = (extra_series_by_dim or {}).get(dim, [])
-        # Radii below the dimension's own Approximation 3 radius get faded
-        # reds (lighter for smaller R); radii above it get faded browns
-        # (darker for larger R), so a glance at the colour family alone
-        # shows which side of the chosen radius a curve falls on.
+        # Smaller radii use lighter shades, larger radii use darker shades.
         below = [item for item in extra if item[0] < main_radius]
         above = [item for item in extra if item[0] > main_radius]
         color_by_radius = {
@@ -280,7 +282,7 @@ def _plot_row(
             {
                 radius: color
                 for (radius, _, _), color in zip(
-                    above, _graded_shades(BROWN_COLOR, len(above))
+                    above, _dark_shades(APPROX3_COLOR, len(above))
                 )
             }
         )
@@ -320,7 +322,7 @@ def _plot_row(
             for radius, color, marker in sorted(legend_entries)
         ]
 
-        axis.axhline(1.0, color="black", lw=0.8, zorder=1)
+        axis.axhline(1.0, color=UNDEFORMED_COLOR, lw=0.8, zorder=1)
         axis.set_yscale("log")
         axis.set_ylim(bottom=axis_minimum / 1.5, top=1.2)
         axis.yaxis.set_minor_formatter(NullFormatter())
@@ -463,7 +465,7 @@ def _make_csft_panel(output_path: Path) -> None:
             s=CHOSEN_RADIUS_MARKER_AREA, linewidths=0.6,
             edgecolors="white", zorder=3,
         )
-        axis.axhline(1.0, color="black", lw=0.8, zorder=1)
+        axis.axhline(1.0, color=UNDEFORMED_COLOR, lw=0.8, zorder=1)
         axis.set_yscale("log")
         axis.set_ylim(bottom=float(ratios.min()) / 1.5, top=1.2)
         axis.yaxis.set_minor_formatter(NullFormatter())

@@ -26,7 +26,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 import XY_utils as xy
-from plot_settings import latex_font_params
+from plot_settings import TRAINING_AMPLITUDE_COLOR, UNDEFORMED_COLOR, latex_font_params
 
 
 ROOT = Path(__file__).resolve().parent
@@ -158,27 +158,20 @@ def create_figure(
     alpha_axis = scaled_axis.twinx()
 
     epochs = np.arange(1, len(epoch_ratios) + 1)
-    variance_axis.plot(epochs, epoch_ratios, color="tab:blue", lw=1.25)
-    variance_axis.axhline(1.0, color="black", lw=0.8, zorder=1)
+    variance_axis.plot(epochs, epoch_ratios, color="black", lw=1.25)
+    variance_axis.axhline(1.0, color=UNDEFORMED_COLOR, lw=0.8, zorder=1)
     variance_axis.set_ylabel(
         r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$"
     )
-    variance_axis.set_title(r"Step 1: train $f_x$ (with $f_0=1$)", fontsize=9, pad=4)
+    variance_axis.set_title(r"Step 1: learn profile $f_x$ ($f_0=1$)", fontsize=9, pad=4)
     variance_axis.set_xscale("log")
     variance_axis.set_xlim(1, len(epochs))
     variance_axis.set_xlabel("training epoch")
-    variance_axis.text(
-        0.965, 0.83,
-        r"$=\langle e^{-2\,\mathrm{Re}\,\Delta S}\rangle$",
-        transform=variance_axis.transAxes,
-        ha="right", va="top",
-        fontsize=plt.rcParams["axes.labelsize"],
-    )
 
     steps = np.arange(len(alpha_steps))
     scaled_axis.plot(steps, optimized_ratios, marker="o", ms=3.5,
-                     color="tab:blue", lw=1.2)
-    scaled_axis.set_title(r"Step 2: optimize $\alpha$", fontsize=9, pad=4)
+                     color="black", lw=1.2)
+    scaled_axis.set_title(r"Step 2: optimize scale $\alpha$", fontsize=9, pad=4)
     variance_axis.set_yscale("log")
     variance_axis.set_ylim(0.13, 1.08)
     variance_axis.set_yticks([0.15, 0.2, 0.3, 0.5, 1.0])
@@ -186,7 +179,7 @@ def create_figure(
     variance_axis.yaxis.set_minor_locator(NullLocator())
     scaled_axis.tick_params(axis="y", which="both", left=True, labelleft=False)
     alpha_axis.plot(steps, alpha_steps, marker="o", ms=3.5,
-                    color="tab:purple", lw=1.2)
+                    color=TRAINING_AMPLITUDE_COLOR, lw=1.2)
     scaled_axis.set_xlabel("optimization step")
     scaled_axis.set_xlim(0, max(1, len(steps) - 1))
     scaled_axis.set_xticks(steps)
@@ -197,8 +190,8 @@ def create_figure(
                 rf"$\alpha^\star={alpha_steps[-1]:.2f}$"],
     )
     alpha_axis.set_ylabel(r"$\alpha$", rotation=270, labelpad=12,
-                          color="tab:purple")
-    alpha_axis.tick_params(axis="y", colors="tab:purple")
+                          color=TRAINING_AMPLITUDE_COLOR)
+    alpha_axis.tick_params(axis="y", colors=TRAINING_AMPLITUDE_COLOR)
 
     for axis in (variance_axis, scaled_axis):
         axis.grid(axis="y", color="0.88", linewidth=0.5)

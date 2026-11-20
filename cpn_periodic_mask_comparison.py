@@ -573,7 +573,7 @@ def plot_comparison(
         training_axis.plot(
             np.arange(len(curve)),
             curve,
-            color="C0",
+            color="black",
             linewidth=1.1,
         )
         training_axis.set_yscale("log")
@@ -784,8 +784,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Load or train both cases, then display their field comparison."""
     args = parse_args()
-    if not args.ensemble.exists():
-        raise FileNotFoundError(args.ensemble)
     beta = beta_from_filename(args.ensemble)
     masked_artifact = (
         args.masked_training_artifact or masked_comparison_savename(beta)
@@ -835,6 +833,22 @@ def main() -> None:
             )
         except ValueError as error:
             print(f"Saved {label} result is incompatible; retraining it ({error})")
+
+    # The manuscript figure can be refreshed from its saved training histories
+    # and selected fields even when the original gauge ensemble is unavailable.
+    # Full-sample variance evaluation still requires that ensemble below.
+    if not args.ensemble.exists():
+        if any(case["loaded"] is None for case in cases.values()):
+            raise FileNotFoundError(args.ensemble)
+        plot_comparison(
+            {label: case["loaded"]["field"] for label, case in cases.items()},
+            {label: case["loaded"]["curve"] for label, case in cases.items()},
+            beta,
+            args.output,
+            {label: case["loaded"]["epoch"] for label, case in cases.items()},
+            mask_radius=args.mask_radius,
+        )
+        return
 
     device = resolve_device(args.device)
     set_seed(args.seed)

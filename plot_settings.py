@@ -11,6 +11,29 @@ from __future__ import annotations
 
 from math import sqrt
 
+# Paper-wide semantic colors.  The four objective colors follow the
+# color-vision-friendly Okabe--Ito palette; gray denotes the undeformed
+# estimator and the variance-ratio-one reference throughout the draft.
+UNDEFORMED_COLOR = "#4A4A4A"
+OBJECTIVE_COLORS = {
+    "variance": "#0072B2",       # direct variance
+    "penalty": "#E69F00",        # Approximation 1
+    "approx2": "#009E73",        # Approximation 2
+    "saddle-point": "#009E73",   # alternate key for Approximation 2
+    "approx3": "#CC79A7",        # Approximation 3
+    "lattice-laplace": "#CC79A7", # alternate key for Approximation 3
+}
+
+# Figure 2 uses one red family for all three deformed estimates.
+TWO_POINT_COLORS = {
+    "glued": "#8F302D",
+    "deformed": "#BC554C",
+    "one_point_squared": "#D98276",
+}
+
+# Figure 7's auxiliary amplitude axis uses a separate olive tone.
+TRAINING_AMPLITUDE_COLOR = "#79712B"
+
 fig_width_pt = 455.24411  # Got this from LaTeX using \showthe\columnwidth
 inches_per_pt = 1.0 / 72.27  # Convert pt to inch
 golden_mean = (sqrt(5) + 1.0) / 2.0  # Aesthetic ratio

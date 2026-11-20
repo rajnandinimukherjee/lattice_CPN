@@ -9,7 +9,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 from .config import (
     LOSS_LABELS,
@@ -19,22 +19,22 @@ from .config import (
 
 SCALING_STYLES = {
     "variance": {
-        "color": "tab:blue",
+        "color": OBJECTIVE_COLORS["variance"],
         "marker": "o",
         "label": "direct variance",
     },
     "penalty": {
-        "color": "tab:orange",
+        "color": OBJECTIVE_COLORS["penalty"],
         "marker": "s",
         "label": "Approx. 1 (weak corr.)",
     },
     "saddle-point": {
-        "color": "tab:green",
+        "color": OBJECTIVE_COLORS["saddle-point"],
         "marker": "^",
         "label": "Approx. 2 (small fluc.)",
     },
     "approx3": {
-        "color": "tab:red",
+        "color": OBJECTIVE_COLORS["approx3"],
         "marker": "D",
         "label": "Approx. 3 (smooth deformation)",
     },
@@ -127,7 +127,7 @@ def plot_scaling(
                 s=20,
             )
 
-        ratio_ax.axhline(1.0, color="black", lw=0.8, zorder=1)
+        ratio_ax.axhline(1.0, color=UNDEFORMED_COLOR, lw=0.8, zorder=1)
         ratio_ax.set_title(
             rf"$d={dim},\ L={lattice_sizes[dim_idx]}$",
             pad=3,

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from plot_training_diagnostics import load_artifact, plt
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR
 
 
 ROOT = Path(__file__).resolve().parent
@@ -17,13 +18,14 @@ TRAINING = {
     ),
 }
 OUTPUT = ROOT / "paper" / "figs" / "xy_field_comparison.pdf"
+DARK_VARIANCE_BLUE = "#00456B"
 
 
 def main() -> None:
     figure, axis = plt.subplots(figsize=(3.5, 1.9))
     for label, path, color in (
-        ("Field-independent", TRAINING["Field-independent"], "tab:blue"),
-        ("Field-dependent", TRAINING["Field-dependent"], "tab:orange"),
+        ("Field-independent", TRAINING["Field-independent"], OBJECTIVE_COLORS["variance"]),
+        ("Field-dependent", TRAINING["Field-dependent"], DARK_VARIANCE_BLUE),
     ):
         data = load_artifact(path)
         epochs = np.arange(len(data["test_var"]))
@@ -31,9 +33,13 @@ def main() -> None:
             data["initial_var"]
         )
         valid = (epochs > 0) & np.isfinite(variance) & (variance > 0)
-        axis.plot(epochs[valid], variance[valid], color=color, label=label, lw=1.25)
+        axis.plot(
+            epochs[valid], variance[valid],
+            color=color, linestyle="-",
+            label=label, lw=1.25,
+        )
 
-    axis.axhline(1, color="0.35", linestyle="--", linewidth=0.8, zorder=0)
+    axis.axhline(1, color=UNDEFORMED_COLOR, linestyle="--", linewidth=0.8, zorder=0)
     axis.set_xscale("log")
     axis.set_yscale("log")
     axis.set_xlim(50, 4000)

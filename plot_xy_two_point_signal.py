@@ -16,7 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from plot_settings import latex_font_params
+from plot_settings import TWO_POINT_COLORS, UNDEFORMED_COLOR, latex_font_params
 
 
 ROOT = Path(__file__).resolve().parent
@@ -33,6 +33,23 @@ def load_summary() -> dict:
     return data
 
 
+def first_floor_crossing(t: np.ndarray, lower_edge: np.ndarray, floor: float) -> float:
+    """Interpolate the first lower-error-bar crossing on the log y-axis."""
+    crossing = np.flatnonzero(
+        (lower_edge[:-1] > floor) & (lower_edge[1:] <= floor)
+    )
+    if crossing.size == 0:
+        raise ValueError("the lower error-bar edge does not cross its noise floor")
+    index = int(crossing[0])
+    if lower_edge[index + 1] <= 0:
+        raise ValueError("cannot interpolate a nonpositive lower edge on a log axis")
+    fraction = (
+        (np.log(floor) - np.log(lower_edge[index]))
+        / (np.log(lower_edge[index + 1]) - np.log(lower_edge[index]))
+    )
+    return float(t[index] + fraction * (t[index + 1] - t[index]))
+
+
 def make_plot(data: dict) -> plt.Figure:
     t = np.asarray(data["time_separations"], dtype=int)
     if not np.array_equal(t, np.arange(1, 17)):
@@ -41,6 +58,9 @@ def make_plot(data: dict) -> plt.Figure:
     n_cfgs = np.asarray(data["n_cfgs"], dtype=float)
     if not np.isfinite(n_cfgs).all() or np.any(n_cfgs <= 0):
         raise ValueError("invalid configuration counts")
+    n_samples = int(data["metadata"]["configuration_count"])
+    if not np.all(n_cfgs == n_samples):
+        raise ValueError("constant noise floors require the same sample count at every separation")
     se = {}
     for method in ("undeformed", "deformed"):
         variance = np.asarray(data[f"{method}_variance"], dtype=float)
@@ -50,15 +70,26 @@ def make_plot(data: dict) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(3.9, 2.5))
     lower_limit = 1e-4
 
-    # On a logarithmic axis the region below each SE shows where the
-    # estimated signal is indistinguishable from zero at one-SE precision.
-    for method, color in (("undeformed", "tab:blue"), ("deformed", "tab:green")):
-        ax.fill_between(t, lower_limit, se[method], color=color, alpha=0.16, linewidth=0, zorder=1)
-        ax.plot(t, se[method], color=color, alpha=0.65, linewidth=0.8, zorder=2)
+    profile_path = ROOT / data["metadata"]["one_point_profile"]
+    one_point_ratio = float(np.load(profile_path, allow_pickle=True).item()["variance_ratio"])
+    if not np.isfinite(one_point_ratio) or one_point_ratio <= 0:
+        raise ValueError(f"invalid one-point variance ratio in {profile_path}")
+    floors = (
+        ("undeformed", 1.0 / np.sqrt(n_samples), UNDEFORMED_COLOR),
+        ("deformed", np.sqrt(one_point_ratio**2 / n_samples), TWO_POINT_COLORS["deformed"]),
+    )
+    for method, floor, color in floors:
+        signal = np.abs(np.asarray(data[f"{method}_mean"], dtype=np.complex128))
+        start = first_floor_crossing(t, signal - se[method], floor)
+        ax.fill_between(
+            [start, 16.5], lower_limit, floor,
+            color=color, alpha=0.16, linewidth=0, zorder=1,
+        )
+        ax.hlines(floor, start, 16.5, color=color, alpha=0.8, linewidth=0.8, zorder=2)
 
     for method, color, marker, facecolor in (
-        ("undeformed", "tab:blue", "o", "tab:blue"),
-        ("deformed", "tab:green", "^", "none"),
+        ("undeformed", UNDEFORMED_COLOR, "o", UNDEFORMED_COLOR),
+        ("deformed", TWO_POINT_COLORS["deformed"], "s", "none"),
     ):
         signal = np.abs(np.asarray(data[f"{method}_mean"], dtype=np.complex128))
         ax.errorbar(
@@ -71,7 +102,7 @@ def make_plot(data: dict) -> plt.Figure:
     ax.set_xlim(0.5, 16.5)
     ax.set_ylim(lower_limit, 1)
     ax.set_xticks(t)
-    ax.set_xlabel(r"$t/a$")
+    ax.set_xlabel(r"$t$")
     ax.set_ylabel(r"$\langle O_t O_0^\dagger\rangle$")
     ax.grid(color="0.8", linewidth=0.5, alpha=0.5)
     ax.set_axisbelow(True)

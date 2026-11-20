@@ -13,9 +13,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, fig_width, latex_font_params
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +24,9 @@ DATA = ROOT / "training_data" / "xy_physical_radius"
 OUTPUT = ROOT / "paper" / "figs" / "xy_physical_radius_profiles.pdf"
 LATTICE_SIZES = {1: 64, 2: 32, 3: 16}
 CRITICAL_BETAS = {1: np.inf, 2: 1.1199, 3: 0.454165}
+APPROX3_SHADES = LinearSegmentedColormap.from_list(
+    "approx3_shades", ["#EAD3E0", OBJECTIVE_COLORS["approx3"], "#783455"]
+)
 
 
 def load_profiles(dimension: int) -> tuple[float, list[tuple[float, int, np.ndarray]]]:
@@ -92,7 +96,7 @@ def plot() -> None:
         _, profiles = datasets[dimension]
         extent = max(radius for _, radius, _ in profiles) + 1
         x = np.arange(0, extent + 1)
-        colors = plt.cm.viridis(np.linspace(0.06, 0.94, len(profiles)))
+        colors = APPROX3_SHADES(np.linspace(0.0, 1.0, len(profiles)))
         critical_beta = CRITICAL_BETAS[dimension]
         critical_label = (
             r"\infty" if np.isinf(critical_beta) else f"{critical_beta:.2f}"

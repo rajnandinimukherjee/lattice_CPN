@@ -24,7 +24,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from plot_settings import fig_width, latex_font_params
+from plot_settings import TWO_POINT_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 SUMMARY = (
     ROOT
@@ -36,6 +36,8 @@ PDF_OUTPUT = FIGURES / "xy_two_point_variance.pdf"
 PNG_OUTPUT = FIGURES / "xy_two_point_variance.png"
 LEGEND_PDF_OUTPUT = FIGURES / "xy_two_point_stn_legend.pdf"
 LEGEND_PNG_OUTPUT = FIGURES / "xy_two_point_stn_legend.png"
+GLUED_TRIANGLE_SIZE = 4.2
+TRAINED_SQUARE_SIZE = 5.2
 
 plt.rcParams.update(latex_font_params)
 plt.rcParams.update(
@@ -105,14 +107,16 @@ def make_plot(data: dict) -> plt.Figure:
         gridspec_kw={"height_ratios": [2.8, 1.2], "hspace": 0.12},
     )
     for method, color, marker in (
-        ("undeformed", "tab:blue", "o"),
-        ("glued", "tab:orange", "s"),
-        ("deformed", "tab:green", "^"),
+        ("undeformed", UNDEFORMED_COLOR, "o"),
+        ("glued", TWO_POINT_COLORS["glued"], "^"),
+        ("deformed", TWO_POINT_COLORS["deformed"], "s"),
     ):
         axis.plot(separations, variances[method], color=color, marker=marker,
-                  markerfacecolor="none" if method != "undeformed" else color,
-                  markersize=3.8, linewidth=0.9)
-    axis.axhline(one_point_ratio**2, color="tab:red", linestyle="--",
+                  markerfacecolor="none" if method == "deformed" else color,
+                  markersize=(TRAINED_SQUARE_SIZE if method == "deformed" else
+                              GLUED_TRIANGLE_SIZE if method == "glued" else 3.6),
+                  markeredgewidth=0.9, linewidth=0.9)
+    axis.axhline(one_point_ratio**2, color=TWO_POINT_COLORS["one_point_squared"], linestyle="--",
                  linewidth=1.0)
 
     all_values = np.concatenate([*variances.values(), [one_point_ratio**2]])
@@ -135,14 +139,14 @@ def make_plot(data: dict) -> plt.Figure:
     gain_axis.plot(
         separations,
         gain,
-        color="tab:orange",
+        color=TWO_POINT_COLORS["glued"],
         marker="D",
         markersize=3.8,
         linestyle="-",
         linewidth=0.9,
         zorder=3,
     )
-    gain_axis.axhline(1.0, color="0.35", linestyle=":", linewidth=0.8, zorder=1)
+    gain_axis.axhline(1.0, color=UNDEFORMED_COLOR, linestyle=":", linewidth=0.8, zorder=1)
     gain_axis.set_xlim(0.5, 16.5)
     gain_upper = float(np.ceil(gain.max() * 2) / 2 + 0.5)
     gain_axis.set_ylim(0.8, gain_upper)
@@ -153,7 +157,7 @@ def make_plot(data: dict) -> plt.Figure:
     )
     gain_axis.set_yticks(gain_ticks, [f"{tick:g}" for tick in gain_ticks])
     gain_axis.set_xticks(separations)
-    gain_axis.set_xlabel(r"$t/a$")
+    gain_axis.set_xlabel(r"$t$")
     gain_axis.set_ylabel("SNR gain", labelpad=4)
     gain_axis.grid(color="0.8", linewidth=0.5, alpha=0.5)
     gain_axis.set_axisbelow(True)
@@ -180,12 +184,12 @@ def make_legend() -> plt.Figure:
             label=label,
         )
         for color, marker, label, markersize, markerfacecolor, markeredgewidth in (
-            ("tab:blue", "o", "Undeformed", 3.2, "tab:blue", 0.8),
-            ("tab:orange", "s", "Glued one-point profile", 5.0, "none", 1.0),
-            ("tab:green", "^", "Trained per separation", 5.0, "none", 1.0),
+            (UNDEFORMED_COLOR, "o", "Undeformed", 3.2, UNDEFORMED_COLOR, 0.8),
+            (TWO_POINT_COLORS["glued"], "^", "Glued one-point profile", GLUED_TRIANGLE_SIZE, TWO_POINT_COLORS["glued"], 1.0),
+            (TWO_POINT_COLORS["deformed"], "s", "Trained per separation", TRAINED_SQUARE_SIZE, "none", 1.0),
         )
     ]
-    handles.append(Line2D([], [], color="tab:red", linestyle="--",
+    handles.append(Line2D([], [], color=TWO_POINT_COLORS["one_point_squared"], linestyle="--",
                           linewidth=1.0, label="Squared one-point variance ratio"))
     figure = plt.figure(figsize=(fig_width, 0.32))
     figure.legend(

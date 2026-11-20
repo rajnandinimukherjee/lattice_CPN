@@ -14,7 +14,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 import XY_utils as xy
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 from xy_opf.config import DATA_DIRECTORY, TRAINING_DATA_DIRECTORY
 from xy_opf.optimization import (
     fit_lattice_laplace_profile,
@@ -37,22 +37,22 @@ plt.rcParams.update(
 
 PROFILE_STYLES = {
     "variance": {
-        "color": "tab:blue",
+        "color": OBJECTIVE_COLORS["variance"],
         "marker": "o",
         "label": "direct variance",
     },
     "penalty": {
-        "color": "tab:orange",
+        "color": OBJECTIVE_COLORS["penalty"],
         "marker": "s",
         "label": "Approx. 1 (weak corr.)",
     },
     "saddle-point": {
-        "color": "tab:green",
+        "color": OBJECTIVE_COLORS["saddle-point"],
         "marker": "^",
         "label": "Approx. 2 (small fluc.)",
     },
     "lattice-laplace": {
-        "color": "tab:red",
+        "color": OBJECTIVE_COLORS["lattice-laplace"],
         "marker": "D",
         "label": "Approx. 3 (smooth deforms)",
     },
@@ -263,7 +263,7 @@ def _add_variance_ratio_inset(
     )
     inset.axhline(
         1.0,
-        color="0.25",
+        color=UNDEFORMED_COLOR,
         linestyle="--",
         linewidth=0.65 * panel_scale,
         zorder=1,

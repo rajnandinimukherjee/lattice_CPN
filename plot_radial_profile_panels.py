@@ -10,7 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from plot_settings import latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, latex_font_params
 from csft_opf.persistence import training_savename as csft_training_savename
 
 
@@ -19,10 +19,10 @@ TRAINING = ROOT / "training_data"
 FIGS = ROOT / "paper" / "figs"
 CSFT_AM = 0.67
 STYLES = (
-    ("variance", "tab:blue", "o"),
-    ("penalty", "tab:orange", "s"),
-    ("approx2", "tab:green", "^"),
-    ("approx3", "tab:red", "D"),
+    ("variance", OBJECTIVE_COLORS["variance"], "o"),
+    ("penalty", OBJECTIVE_COLORS["penalty"], "s"),
+    ("approx2", OBJECTIVE_COLORS["approx2"], "^"),
+    ("approx3", OBJECTIVE_COLORS["approx3"], "D"),
 )
 
 plt.rcParams.update(latex_font_params)
@@ -104,7 +104,7 @@ def _plot(model: str, output: Path) -> None:
     inset.set_yticks([0, 1])
     inset.set_ylabel(r"$\operatorname{Var}[\mathcal{Q}]/\operatorname{Var}[\mathcal{O}]$",
                      fontsize=10, labelpad=1)
-    inset.axhline(1, color="0.25", linestyle="--", linewidth=0.65)
+    inset.axhline(1, color=UNDEFORMED_COLOR, linestyle="--", linewidth=0.65)
     inset.tick_params(axis="y", labelsize=9, length=2, pad=1)
     fig.tight_layout(pad=0.25)
     # Match the inset box height to its vertically typeset ylabel.

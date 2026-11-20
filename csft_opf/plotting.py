@@ -9,15 +9,15 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 from .config import LOSS_LABELS, LOSS_MARKERS
 
 SCALING_STYLES = {
-    "variance": {"color": "tab:blue", "marker": "o", "label": "direct variance"},
-    "penalty": {"color": "tab:orange", "marker": "s", "label": "Approx. 1"},
-    "saddle-point": {"color": "tab:green", "marker": "^", "label": "Approx. 2"},
-    "approx3": {"color": "tab:red", "marker": "D", "label": "Approx. 3"},
+    "variance": {"color": OBJECTIVE_COLORS["variance"], "marker": "o", "label": "direct variance"},
+    "penalty": {"color": OBJECTIVE_COLORS["penalty"], "marker": "s", "label": "Approx. 1"},
+    "saddle-point": {"color": OBJECTIVE_COLORS["saddle-point"], "marker": "^", "label": "Approx. 2"},
+    "approx3": {"color": OBJECTIVE_COLORS["approx3"], "marker": "D", "label": "Approx. 3"},
 }
 
 plt.rcParams.update(latex_font_params)
@@ -67,7 +67,7 @@ def plot_scaling(
                 marker=style["marker"],
                 s=20,
             )
-        axes[0, dim_idx].axhline(1.0, color="black", lw=0.8)
+        axes[0, dim_idx].axhline(1.0, color=UNDEFORMED_COLOR, lw=0.8)
         axes[0, dim_idx].set_title(
             rf"$d={dim},\ L={lattice_sizes[dim_idx]}$"
         )

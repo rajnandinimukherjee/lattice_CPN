@@ -1,5 +1,11 @@
 # Paper figure sources
 
+All generators use the semantic palette in `plot_settings.py`: dark gray for
+undeformed data and variance-ratio-one guides; blue, orange, green, and purple
+for direct variance and Approximations 1, 2, and 3 respectively. Figure 2's
+deformed estimates use red shades, while training curves in Figures 7 and 8
+are black.
+
 Run commands from the repository root. `paper/main.tex` includes the 23 PDF files below. The plotting commands read saved results unless noted; run the corresponding analysis scripts first if their saved inputs are missing.
 
 | PDF in `paper/figs/` | Generator |

@@ -22,7 +22,7 @@ import numpy as np
 from cpn_opf.config import GAUGE_CRITICAL_TEMPERATURES
 from cpn_opf.study import _load_dimension as load_cp2_dimension
 from csft_opf.persistence import training_files_for_dimension as scalar_training_files
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 from xy_opf.config import XY_CRITICAL_TEMPERATURES
 from xy_opf.study import _load_dimension as load_xy_dimension
 
@@ -31,8 +31,8 @@ LOSSES = ("variance", "approx3")
 XY_RADII = {1: 20, 2: 6, 3: 6}
 
 STYLES = {
-    "variance": dict(color="tab:blue", marker="o", label="Direct variance"),
-    "approx3": dict(color="tab:red", marker="D", label="Approx. 3"),
+    "variance": dict(color=OBJECTIVE_COLORS["variance"], marker="o", label="Direct variance"),
+    "approx3": dict(color=OBJECTIVE_COLORS["approx3"], marker="D", label="Approx. 3"),
 }
 
 plt.rcParams.update(latex_font_params)
@@ -171,7 +171,7 @@ def render_row(
         t_min, t_max = float(all_temperatures.min()), float(all_temperatures.max())
         padding = 0.035 * (t_max - t_min)
         axis.set_xlim(max(0, t_min - padding), t_max + padding)
-        axis.axhline(1.0, color="0.25", lw=0.65, zorder=1)
+        axis.axhline(1.0, color=UNDEFORMED_COLOR, lw=0.65, zorder=1)
         axis.set_yscale("log")
         axis.set_ylim(bottom=axis_minimum / 1.5, top=1.2)
         axis.yaxis.set_minor_formatter(NullFormatter())

@@ -24,7 +24,7 @@ from cpn_opf.optimization import (
 )
 from cpn_opf.persistence import training_savename
 from observables import cpn_one_pt_fn
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 
 plt.rcParams.update(latex_font_params)
@@ -42,22 +42,22 @@ plt.rcParams.update(
 
 PROFILE_STYLES = {
     "variance": {
-        "color": "tab:blue",
+        "color": OBJECTIVE_COLORS["variance"],
         "marker": "o",
         "label": "direct variance",
     },
     "penalty": {
-        "color": "tab:orange",
+        "color": OBJECTIVE_COLORS["penalty"],
         "marker": "s",
         "label": "Approx. 1 (weak corr.)",
     },
     "approx2": {
-        "color": "tab:green",
+        "color": OBJECTIVE_COLORS["approx2"],
         "marker": "^",
         "label": "Approx. 2 (small fluc.)",
     },
     "approx3": {
-        "color": "tab:red",
+        "color": OBJECTIVE_COLORS["approx3"],
         "marker": "D",
         "label": "Approx. 3 (smooth deforms)",
     },
@@ -567,7 +567,7 @@ def _add_variance_ratio_inset(
     )
     inset.axhline(
         1.0,
-        color="0.25",
+        color=UNDEFORMED_COLOR,
         linestyle="--",
         linewidth=0.65 * panel_scale,
         zorder=1,

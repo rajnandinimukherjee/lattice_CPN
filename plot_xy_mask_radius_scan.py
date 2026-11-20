@@ -40,7 +40,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import LogLocator, NullFormatter
 import numpy as np
 
-from plot_settings import fig_width, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, UNDEFORMED_COLOR, fig_width, latex_font_params
 
 SCAN_DATA_DIRECTORY = Path("training_data/xy_mask_radius_scan")
 FIGURES_DIRECTORY = Path("paper/figs")
@@ -116,7 +116,7 @@ def save_legend(output_path: Path) -> None:
         Line2D(
             [],
             [],
-            color="tab:blue",
+            color=OBJECTIVE_COLORS["variance"],
             marker="o",
             markersize=3.2,
             linewidth=1.0,
@@ -125,7 +125,7 @@ def save_legend(output_path: Path) -> None:
         Line2D(
             [],
             [],
-            color="tab:red",
+            color=OBJECTIVE_COLORS["approx3"],
             marker="D",
             markersize=3.4,
             linewidth=1.0,
@@ -134,7 +134,7 @@ def save_legend(output_path: Path) -> None:
         Line2D(
             [],
             [],
-            color="0.2",
+            color=OBJECTIVE_COLORS["approx3"],
             linestyle="-.",
             linewidth=1.1,
             label="Approx. 3 (closed form)",
@@ -201,14 +201,14 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
     in d=2, where the closed-form power law becomes a straight line.
     """
     radii = data["radii"]
-    axis.axhline(1.0, color="black", linewidth=0.8, zorder=1)
+    axis.axhline(1.0, color=UNDEFORMED_COLOR, linewidth=0.8, zorder=1)
     axis.axvline(
         data["published_radius"], color="0.45", linestyle=":", linewidth=0.9, zorder=1
     )
     axis.plot(
         radii,
         data["best"],
-        color="tab:blue",
+        color=OBJECTIVE_COLORS["variance"],
         marker="o",
         markersize=3.2,
         linestyle="-",
@@ -218,7 +218,7 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
     axis.plot(
         radii,
         data["approx3"],
-        color="tab:red",
+        color=OBJECTIVE_COLORS["approx3"],
         marker="D",
         markersize=3.4,
         linestyle="-",
@@ -230,7 +230,7 @@ def plot_panel(axis: plt.Axes, data: dict[str, object]) -> None:
     axis.plot(
         theory_radii,
         theory,
-        color="0.2",
+        color=OBJECTIVE_COLORS["approx3"],
         linestyle="-.",
         linewidth=1.1,
         zorder=2,

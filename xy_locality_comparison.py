@@ -44,7 +44,7 @@ from deformations import ThetaDefs
 from losses import VarianceLoss
 from networks import UNet
 from observables import XYOnePtFn
-from plot_settings import fig_width_pt, inches_per_pt, latex_font_params
+from plot_settings import OBJECTIVE_COLORS, fig_width_pt, inches_per_pt, latex_font_params
 from training import Trainer, init_weights
 from xy_opf.training import make_split_mask, save_training_result
 
@@ -545,11 +545,11 @@ def main() -> None:
     )
     epochs = np.arange(epoch_count)
     curve_axis.plot(
-        epochs, unmasked_smoothed, color="tab:red", linewidth=1.2,
+        epochs, unmasked_smoothed, color="#6FA9CE", linewidth=1.2,
         label="unmasked",
     )
     curve_axis.plot(
-        epochs, masked_smoothed, color="tab:blue", linewidth=1.2,
+        epochs, masked_smoothed, color=OBJECTIVE_COLORS["variance"], linewidth=1.2,
         label="masked",
     )
     curve_axis.set_yscale("log")
